@@ -158,6 +158,13 @@ def receive(order_id):
     return redirect(url_for("order_detail", order_id=order_id))
 
 
+@app.route("/logs")
+def show_logs():
+    with db.connect() as conn:
+        logs = conn.execute("SELECT * FROM logs ORDER BY id DESC").fetchall()
+    return render_template("logs.html", logs=logs)
+
+
 if __name__ == "__main__":
     # Replit 需要监听 0.0.0.0，端口优先用环境变量 PORT
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)

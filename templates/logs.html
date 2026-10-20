@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>操作日志</h1>
+<p class="muted">最新的在最上面，时间是模拟时间。</p>
+<table>
+  <thead>
+    <tr><th>时间</th><th>角色</th><th>动作</th><th>内容</th></tr>
+  </thead>
+  <tbody>
+    {% for l in logs %}
+    <tr>
+      <td data-label="时间">{{ l.time }}</td>
+      <td data-label="角色">{{ l.role }}</td>
+      <td data-label="动作">{{ l.action }}</td>
+      <td data-label="内容">{{ l.content }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4">还没有日志</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
