@@ -2,12 +2,17 @@ import os
 
 from flask import Flask
 
+import db
+
 app = Flask(__name__)
+db.init_db()
 
 
 @app.route("/")
 def index():
-    return "SDC 第一版：Flask 已运行"
+    with db.connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+    return f"SDC 第一版：数据库里有 {count} 张订单"
 
 
 if __name__ == "__main__":
