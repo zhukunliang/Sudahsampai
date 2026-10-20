@@ -1,7 +1,7 @@
 import os
 from datetime import date, timedelta
 
-from flask import Flask, abort, flash, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 
 import db
 
@@ -13,7 +13,7 @@ db.init_db()
 
 @app.context_processor
 def inject_globals():
-    return {"sim_today": db.today().isoformat()}
+    return {"sim_today": db.today().isoformat(), "role": current_role(), "roles": (OWNER, CLERK)}
 
 
 def decorate(row):
@@ -59,8 +59,24 @@ def index():
     return render_template("index.html", orders=[decorate(r) for r in rows])
 
 
+OWNER = "店主"
+CLERK = "店员"
+
+
 def current_role():
-    return "店主"
+    return session.get("role", OWNER)
+
+
+@app.route("/role", methods=["POST"])
+def switch_role():
+    role = request.form.get("role")
+    if role in (OWNER, CLERK) and role != current_role():
+        old = current_role()
+        session["role"] = role
+        with db.connect() as conn:
+            db.add_log(conn, role, "切换角色", f"{old} → {role}")
+        flash(f"已切换为{role}", "ok")
+    return redirect(request.referrer or url_for("index"))
 
 
 @app.route("/orders/new", methods=["GET", "POST"])
@@ -114,6 +130,10 @@ def update_rules(order_id):
     role = current_role()
     with db.connect() as conn:
         o = get_order(conn, order_id)
+        if role != OWNER:
+            db.add_log(conn, role, "拒绝修改规则", f"#{order_id} 店员无权修改提醒规则")
+            flash("店员不能修改提醒规则，请切换到店主", "error")
+            return render_template("detail.html", o=decorate(o)), 403
         try:
             remind = int(request.form["remind_days_before"])
         except (KeyError, ValueError):

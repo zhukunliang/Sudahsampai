@@ -15,6 +15,12 @@
   </header>
   <div class="bar">
     <span>模拟日期：<b>{{ sim_today }}</b></span>
+    <form method="post" action="{{ url_for('switch_role') }}">
+      角色：
+      {% for r in roles %}
+        <button type="submit" name="role" value="{{ r }}" class="{{ '' if r == role else 'secondary' }}">{{ r }}</button>
+      {% endfor %}
+    </form>
   </div>
   <main>
     {% with messages = get_flashed_messages(with_categories=true) %}
