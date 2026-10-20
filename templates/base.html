@@ -15,6 +15,9 @@
   </header>
   <div class="bar">
     <span>模拟日期：<b>{{ sim_today }}</b></span>
+    <form method="post" action="{{ url_for('time_forward') }}">
+      <button type="submit">快进 1 天</button>
+    </form>
     <form method="post" action="{{ url_for('switch_role') }}">
       角色：
       {% for r in roles %}

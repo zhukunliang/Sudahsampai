@@ -19,4 +19,7 @@
     {% endfor %}
   </tbody>
 </table>
+<form method="post" action="{{ url_for('reset') }}" onsubmit="return confirm('清空所有订单和日志，重新生成合成数据？')">
+  <button type="submit" class="secondary">重置演示数据</button>
+</form>
 {% endblock %}

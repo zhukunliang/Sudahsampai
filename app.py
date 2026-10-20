@@ -178,6 +178,40 @@ def receive(order_id):
     return redirect(url_for("order_detail", order_id=order_id))
 
 
+@app.route("/time/forward", methods=["POST"])
+def time_forward():
+    """模拟时间快进 1 天，然后检查待送达订单：进入提醒窗口的写提醒，过了交货日期的改成逾期。"""
+    role = current_role()
+    db.set_offset(db.get_offset() + 1)
+    t = db.today()
+    reminders = overdue = 0
+    with db.connect() as conn:
+        db.add_log(conn, role, "时间快进", f"模拟日期推进到 {t.isoformat()}")
+        rows = conn.execute("SELECT * FROM orders WHERE status = ?", (db.PENDING,)).fetchall()
+        for o in rows:
+            days_left = (date.fromisoformat(o["delivery_date"]) - t).days
+            if days_left < 0:
+                conn.execute("UPDATE orders SET status = ? WHERE id = ?", (db.OVERDUE, o["id"]))
+                db.add_log(conn, "系统", "发现逾期",
+                           f"#{o['id']} {o['supplier']} {o['product']} 应于 {o['delivery_date']} 送达，已逾期 {-days_left} 天")
+                overdue += 1
+            elif days_left <= o["remind_days_before"]:
+                when = "今天到期" if days_left == 0 else f"{days_left} 天后到期"
+                chase = "，已开启自动催货（第二版发送 WhatsApp）" if o["auto_chase"] else ""
+                db.add_log(conn, "系统", "到期提醒",
+                           f"#{o['id']} {o['supplier']} {o['product']} {when}{chase}")
+                reminders += 1
+    flash(f"已快进到 {t.isoformat()}：{reminders} 条到期提醒，{overdue} 张新逾期", "ok")
+    return redirect(request.referrer or url_for("index"))
+
+
+@app.route("/reset", methods=["POST"])
+def reset():
+    db.reset_db()
+    flash("演示数据已重置", "ok")
+    return redirect(url_for("index"))
+
+
 @app.route("/logs")
 def show_logs():
     with db.connect() as conn:
