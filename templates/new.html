@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>新增订单</h1>
+<form method="post" class="card">
+  <label for="supplier">供应商名</label>
+  <input type="text" id="supplier" name="supplier" required value="{{ form.supplier }}">
+
+  <label for="whatsapp">WhatsApp 号码</label>
+  <input type="tel" id="whatsapp" name="whatsapp" required placeholder="+60 12-345 6789" value="{{ form.whatsapp }}">
+
+  <label for="product">商品</label>
+  <input type="text" id="product" name="product" required value="{{ form.product }}">
+
+  <label for="quantity">数量</label>
+  <input type="number" id="quantity" name="quantity" min="1" required value="{{ form.quantity }}">
+
+  <label for="delivery_date">交货日期</label>
+  <input type="date" id="delivery_date" name="delivery_date" required value="{{ form.delivery_date }}">
+
+  <label for="shelf_life_days">保质期（天）</label>
+  <input type="number" id="shelf_life_days" name="shelf_life_days" min="0" required value="{{ form.shelf_life_days }}">
+
+  <label for="remind_days_before">提前几天提醒</label>
+  <input type="number" id="remind_days_before" name="remind_days_before" min="0" required value="{{ form.remind_days_before }}">
+
+  <label class="check">
+    <input type="checkbox" name="auto_chase" value="1" {% if form.auto_chase %}checked{% endif %}>
+    自动催货
+  </label>
+
+  <button type="submit">保存订单</button>
+</form>
+{% endblock %}
