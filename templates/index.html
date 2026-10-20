@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>订单列表</h1>
+<p class="legend"><span class="soon">黄色 = 快到期</span><span class="late">红色 = 逾期</span></p>
+<table>
+  <thead>
+    <tr>
+      <th>#</th><th>供应商</th><th>商品</th><th>数量</th><th>交货日期</th><th>剩余</th><th>状态</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for o in orders %}
+    <tr class="{{ o.flag }}">
+      <td data-label="#">{{ o.id }}</td>
+      <td data-label="供应商">{{ o.supplier }}</td>
+      <td data-label="商品">{{ o.product }}</td>
+      <td data-label="数量">{{ o.quantity }}</td>
+      <td data-label="交货日期">{{ o.delivery_date }}</td>
+      <td data-label="剩余">{{ o.days_text }}</td>
+      <td data-label="状态">{{ o.status }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7">还没有订单</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
