@@ -11,7 +11,7 @@
   <tbody>
     {% for o in orders %}
     <tr class="{{ o.flag }}">
-      <td data-label="#">{{ o.id }}</td>
+      <td data-label="#"><a href="{{ url_for('order_detail', order_id=o.id) }}">#{{ o.id }} 查看</a></td>
       <td data-label="供应商">{{ o.supplier }}</td>
       <td data-label="商品">{{ o.product }}</td>
       <td data-label="数量">{{ o.quantity }}</td>

@@ -1,7 +1,7 @@
 import os
 from datetime import date, timedelta
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, url_for
 
 import db
 
@@ -33,7 +33,23 @@ def decorate(row):
     else:
         o["flag"] = ""
         o["days_text"] = f"还剩 {days_left} 天"
+
+    o["diff_text"] = ""
+    o["expires_on"] = ""
+    if o["status"] == db.ARRIVED:
+        diff = o["actual_quantity"] - o["quantity"]
+        if diff:
+            o["diff_text"] = f"少到 {-diff}" if diff < 0 else f"多到 {diff}"
+        arrived_on = date.fromisoformat(o["delivered_at"][:10])
+        o["expires_on"] = (arrived_on + timedelta(days=o["shelf_life_days"])).isoformat()
     return o
+
+
+def get_order(conn, order_id):
+    row = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+    if row is None:
+        abort(404)
+    return row
 
 
 @app.route("/")
@@ -84,6 +100,62 @@ def new_order():
                    f"#{order_id} {values[0]}：{values[2]} × {values[3]}，交货 {values[4]}")
     flash(f"已新增订单 #{order_id}", "ok")
     return redirect(url_for("index"))
+
+
+@app.route("/orders/<int:order_id>")
+def order_detail(order_id):
+    with db.connect() as conn:
+        o = decorate(get_order(conn, order_id))
+    return render_template("detail.html", o=o)
+
+
+@app.route("/orders/<int:order_id>/rules", methods=["POST"])
+def update_rules(order_id):
+    role = current_role()
+    with db.connect() as conn:
+        o = get_order(conn, order_id)
+        try:
+            remind = int(request.form["remind_days_before"])
+        except (KeyError, ValueError):
+            flash("提前提醒天数要填数字", "error")
+            return redirect(url_for("order_detail", order_id=order_id))
+        auto = 1 if request.form.get("auto_chase") else 0
+        conn.execute("UPDATE orders SET remind_days_before = ?, auto_chase = ? WHERE id = ?",
+                     (remind, auto, order_id))
+        db.add_log(conn, role, "修改规则",
+                   f"#{order_id} 提前提醒 {o['remind_days_before']}→{remind} 天，"
+                   f"自动催货 {'开' if o['auto_chase'] else '关'}→{'开' if auto else '关'}")
+    flash("提醒规则已保存", "ok")
+    return redirect(url_for("order_detail", order_id=order_id))
+
+
+@app.route("/orders/<int:order_id>/receive", methods=["POST"])
+def receive(order_id):
+    role = current_role()
+    with db.connect() as conn:
+        o = get_order(conn, order_id)
+        if o["status"] == db.ARRIVED:
+            flash("这张订单已经收过货了", "error")
+            return redirect(url_for("order_detail", order_id=order_id))
+        try:
+            actual = int(request.form["actual_quantity"])
+        except (KeyError, ValueError):
+            flash("实际数量要填数字", "error")
+            return redirect(url_for("order_detail", order_id=order_id))
+        delivered_at = db.now().strftime("%Y-%m-%d %H:%M")
+        conn.execute(
+            "UPDATE orders SET status = ?, actual_quantity = ?, delivered_at = ? WHERE id = ?",
+            (db.ARRIVED, actual, delivered_at, order_id),
+        )
+        db.add_log(conn, role, "确认收货", f"#{order_id} {o['product']} 实到 {actual}（订购 {o['quantity']}）")
+        diff = actual - o["quantity"]
+        if diff:
+            text = f"少到 {-diff}" if diff < 0 else f"多到 {diff}"
+            db.add_log(conn, role, "发现差异", f"#{order_id} {o['supplier']} {o['product']}：{text}")
+            flash(f"已收货，数量不一致：{text}", "error")
+        else:
+            flash("已收货，数量一致", "ok")
+    return redirect(url_for("order_detail", order_id=order_id))
 
 
 if __name__ == "__main__":
