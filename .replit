@@ -1,0 +1,14 @@
+modules = ["python-3.11"]
+run = "pip install -r requirements.txt && python app.py"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+deploymentTarget = "vm"
+build = ["pip", "install", "-r", "requirements.txt"]
+run = ["python", "app.py"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80
