@@ -56,6 +56,24 @@ tr.diff td { background: #ffd8a8; }
 }
 .alert-sub { font-size: 14px; font-weight: normal; margin-top: 4px; }
 
+/* 日志动作标签：每类动作一种颜色 */
+.log-tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 13px; white-space: nowrap; }
+.log-blue { background: #d0ebff; color: #1864ab; }
+.log-yellow { background: #fff3bf; color: #8a6d00; }
+.log-red { background: #ffd6d6; color: #c92a2a; }
+.log-green { background: #d3f9d8; color: #2b8a3e; }
+.log-orange { background: #ffd8a8; color: #b34700; }
+.log-purple { background: #e5dbff; color: #5f3dc4; }
+.log-gray-blue { background: #dee2e6; color: #364fc7; }
+.log-gray { background: #f1f3f5; color: #666; }
+table.logs { font-size: 14px; }
+
+/* 日志筛选：一行排开 */
+.filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.filter label { margin: 0; }
+.filter input[type=text] { width: 8em; }
+.filter button { margin: 0; }
+
 .card { background: #fff; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
 .card dl { display: grid; grid-template-columns: 8em 1fr; gap: 4px 8px; margin: 0; }
 .card dt { color: #666; }

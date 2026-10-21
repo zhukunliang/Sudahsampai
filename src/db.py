@@ -33,7 +33,23 @@ AWAITING = (PENDING, OVERDUE)
 ISSUES = (DISCREPANCY, RESTOCK_REQUESTED, NEGOTIATING)
 
 # 表结构每改一次就把这个数字加 1，启动时发现版本不同就重建
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# 日志动作 → (标签文字, 标签颜色)。同一类动作用同一种颜色；不在表里的动作显示灰色"其他"
+ACTION_TAGS = {
+    "order_created": ("新增", "blue"),
+    "reminder": ("提醒", "yellow"),
+    "overdue": ("提醒", "yellow"),
+    "chase": ("催货", "red"),
+    "received": ("收货", "green"),
+    "discrepancy": ("差异", "orange"),
+    "discrepancy_accepted": ("差异", "orange"),
+    "restock_requested": ("差异", "orange"),
+    "negotiating": ("差异", "orange"),
+    "permission_denied": ("权限拒绝", "purple"),
+    "role_switched": ("角色切换", "gray-blue"),
+}
+OTHER_TAG = ("其他", "gray")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS orders (
@@ -56,10 +72,12 @@ CREATE TABLE IF NOT EXISTS orders (
 
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    time TEXT NOT NULL,                  -- 时间（模拟时间）
+    timestamp TEXT NOT NULL,             -- 真实时间 YYYY-MM-DD HH:MM:SS
+    sim_date TEXT NOT NULL,              -- 当时的模拟日期 YYYY-MM-DD
     role TEXT NOT NULL,                  -- 角色
-    action TEXT NOT NULL,                -- 动作
-    content TEXT NOT NULL                -- 内容
+    action TEXT NOT NULL,                -- 动作（英文代码，见 ACTION_TAGS）
+    detail TEXT NOT NULL,                -- 内容
+    order_id INTEGER                     -- 跟哪张订单有关；和订单无关的日志为空
 );
 """
 
@@ -89,17 +107,32 @@ def today():
     return date.today() + timedelta(days=get_offset())
 
 
-def now():
-    return datetime.now() + timedelta(days=get_offset())
-
-
 # ---------- 日志 ----------
 
-def add_log(conn, role, action, content):
+def add_log(conn, role, action, detail, order_id=None):
+    """写一条日志：同时记下真实时间和当时的模拟日期。"""
     conn.execute(
-        "INSERT INTO logs (time, role, action, content) VALUES (?, ?, ?, ?)",
-        (now().strftime("%Y-%m-%d %H:%M"), role, action, content),
+        """INSERT INTO logs (timestamp, sim_date, role, action, detail, order_id)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), today().isoformat(),
+         role, action, detail, order_id),
     )
+
+
+def get_logs(conn, order_id=None):
+    """按时间倒序取日志；给了 order_id 就只取这张订单的。
+    id 是按写入顺序自增的，所以 id 越大越新。"""
+    if order_id is None:
+        rows = conn.execute("SELECT * FROM logs ORDER BY id DESC").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM logs WHERE order_id = ? ORDER BY id DESC",
+                            (order_id,)).fetchall()
+    logs = []
+    for r in rows:
+        log = dict(r)
+        log["tag"], log["color"] = ACTION_TAGS.get(log["action"], OTHER_TAG)
+        logs.append(log)
+    return logs
 
 
 # ---------- 合成数据 ----------
@@ -134,7 +167,7 @@ def seed(conn):
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
-    add_log(conn, "系统", "初始化", f"写入 {len(rows)} 张合成订单")
+    add_log(conn, "系统", "seeded", f"写入 {len(rows)} 张合成订单")
 
 
 def init_db():

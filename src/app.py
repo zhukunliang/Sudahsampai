@@ -97,7 +97,7 @@ def switch_role():
         old = current_role()
         session["role"] = role
         with db.connect() as conn:
-            db.add_log(conn, role, "切换角色", f"{old} → {role}")
+            db.add_log(conn, role, "role_switched", f"{old} → {role}")
         flash(f"已切换为{role}", "ok")
     return redirect(request.referrer or url_for("index"))
 
@@ -175,9 +175,9 @@ def new_order():
         )
         order_id = cur.lastrowid
         # 日志：role 列记录"谁"，内容记录"新增了什么"
-        db.add_log(conn, current_role(), "新增订单",
+        db.add_log(conn, current_role(), "order_created",
                    f"#{order_id} 向 {data['supplier'] or '（未填供应商）'} 订 {data['product']} "
-                   f"{data['quantity']} {data['unit']}，交货 {data['delivery_date']}")
+                   f"{data['quantity']} {data['unit']}，交货 {data['delivery_date']}", order_id)
     flash(f"已新增订单 #{order_id}", "ok")
     return redirect(url_for("index"))
 
@@ -186,14 +186,17 @@ def new_order():
 def order_detail(order_id):
     with db.connect() as conn:
         o = decorate(get_order(conn, order_id))
-    return render_template("detail.html", o=o)
+        logs = db.get_logs(conn, order_id)  # 页面底部显示这张订单自己的日志
+    return render_template("detail.html", o=o, logs=logs)
 
 
 def deny(conn, order_row, what):
     """店员做了只有店主能做的事：写一条 permission_denied 日志，返回 403 页面。"""
-    db.add_log(conn, current_role(), "permission_denied", f"#{order_row['id']} 店员尝试{what}，已拒绝")
+    db.add_log(conn, current_role(), "permission_denied",
+               f"#{order_row['id']} 店员尝试{what}，已拒绝", order_row["id"])
     flash(f"仅店主可以{what}", "error")
-    return render_template("detail.html", o=decorate(order_row)), 403
+    logs = db.get_logs(conn, order_row["id"])
+    return render_template("detail.html", o=decorate(order_row), logs=logs), 403
 
 
 @app.route("/order/<int:order_id>/rules", methods=["POST"])
@@ -216,7 +219,7 @@ def update_rules(order_id):
                      (remind, auto, order_id))
         db.add_log(conn, role, "rules_updated",
                    f"#{order_id} 提前提醒 {o['remind_days_before']}→{remind} 天，"
-                   f"自动催货 {'开' if o['auto_chase'] else '关'}→{'开' if auto else '关'}")
+                   f"自动催货 {'开' if o['auto_chase'] else '关'}→{'开' if auto else '关'}", order_id)
     flash("提醒规则已保存", "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
@@ -250,12 +253,12 @@ def receive(order_id):
         timing = "准时" if on_time else "迟到"
         if status == db.DELIVERED:
             db.add_log(conn, role, "received",
-                       f"#{order_id} {o['product']} 实收 {received} {o['unit']}，数量一致，{timing}")
+                       f"#{order_id} {o['product']} 实收 {received} {o['unit']}，数量一致，{timing}", order_id)
             flash("已确认收货，数量一致", "ok")
         else:
             text = describe_diff(o["quantity"], received, o["unit"])
             db.add_log(conn, role, "discrepancy",
-                       f"#{order_id} {o['supplier']} {o['product']}：{text}，{timing}")
+                       f"#{order_id} {o['supplier']} {o['product']}：{text}，{timing}", order_id)
             flash("已记录收货，但数量不一致，请店主处理", "error")
     return redirect(url_for("order_detail", order_id=order_id))
 
@@ -286,7 +289,7 @@ def resolve(order_id):
         new_status, action, label = RESOLUTIONS[choice]
         conn.execute("UPDATE orders SET status = ? WHERE id = ?", (new_status, order_id))
         text = describe_diff(o["quantity"], o["received_quantity"], o["unit"])
-        db.add_log(conn, role, action, f"#{order_id} {o['product']}（{text}）：{label}")
+        db.add_log(conn, role, action, f"#{order_id} {o['product']}（{text}）：{label}", order_id)
     flash(f"已{label}", "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
@@ -299,20 +302,25 @@ def time_forward():
     t = db.today()
     reminders = overdue = 0
     with db.connect() as conn:
-        db.add_log(conn, role, "时间快进", f"模拟日期推进到 {t.isoformat()}")
+        db.add_log(conn, role, "time_forward", f"模拟日期推进到 {t.isoformat()}")
         rows = conn.execute("SELECT * FROM orders WHERE status = ?", (db.PENDING,)).fetchall()
         for o in rows:
             days_left = (date.fromisoformat(o["delivery_date"]) - t).days
             if days_left < 0:
                 conn.execute("UPDATE orders SET status = ? WHERE id = ?", (db.OVERDUE, o["id"]))
-                db.add_log(conn, "系统", "发现逾期",
-                           f"#{o['id']} {o['supplier']} {o['product']} 应于 {o['delivery_date']} 送达，已逾期 {-days_left} 天")
+                db.add_log(conn, "系统", "overdue",
+                           f"#{o['id']} {o['supplier']} {o['product']} 应于 {o['delivery_date']} 送达，"
+                           f"已逾期 {-days_left} 天", o["id"])
+                if o["auto_chase"]:
+                    # 只记录"该催货了"，真正发 WhatsApp 是第二版的功能
+                    db.add_log(conn, "系统", "chase",
+                               f"#{o['id']} 已逾期且开启了自动催货：需要通过 WhatsApp {o['whatsapp']} "
+                               f"催 {o['supplier']}（发送功能第二版实现）", o["id"])
                 overdue += 1
             elif days_left <= o["remind_days_before"]:
                 when = "今天到期" if days_left == 0 else f"{days_left} 天后到期"
-                chase = "，已开启自动催货（第二版发送 WhatsApp）" if o["auto_chase"] else ""
-                db.add_log(conn, "系统", "到期提醒",
-                           f"#{o['id']} {o['supplier']} {o['product']} {when}{chase}")
+                db.add_log(conn, "系统", "reminder",
+                           f"#{o['id']} {o['supplier']} {o['product']} {when}", o["id"])
                 reminders += 1
     flash(f"已快进到 {t.isoformat()}：{reminders} 条到期提醒，{overdue} 张新逾期", "ok")
     return redirect(request.referrer or url_for("index"))
@@ -327,9 +335,14 @@ def reset():
 
 @app.route("/logs")
 def show_logs():
+    # 网址里的 ?order=6 表示只看 #6 的日志；没填或填错就显示全部
+    order_text = request.args.get("order", "").strip().lstrip("#")
+    order_id = int(order_text) if order_text.isdigit() else None
+    if order_text and order_id is None:
+        flash("订单编号要填数字", "error")
     with db.connect() as conn:
-        logs = conn.execute("SELECT * FROM logs ORDER BY id DESC").fetchall()
-    return render_template("logs.html", logs=logs)
+        logs = db.get_logs(conn, order_id)
+    return render_template("logs.html", logs=logs, order_id=order_id)
 
 
 if __name__ == "__main__":

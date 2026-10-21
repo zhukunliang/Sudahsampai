@@ -64,4 +64,7 @@
   </label>
   <button type="submit" {% if not is_owner %}disabled{% endif %}>保存规则</button>
 </form>
+
+<h2>这张订单的日志</h2>
+{% include "_log_table.html" %}
 {% endblock %}
