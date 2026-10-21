@@ -38,15 +38,28 @@ th, td { padding: 8px; border-bottom: 1px solid #e5e5e5; text-align: left; verti
 th { background: #fafafa; font-size: 14px; }
 tr.soon td { background: #fff3bf; }
 tr.late td { background: #ffd6d6; }
-.legend span { display: inline-block; padding: 0 6px; border-radius: 4px; margin-right: 6px; font-size: 13px; }
-.legend .soon { background: #fff3bf; }
-.legend .late { background: #ffd6d6; }
+tr.diff td { background: #ffd8a8; }
+.legend span, .tag { display: inline-block; padding: 0 6px; border-radius: 4px; margin-right: 6px; font-size: 13px; }
+.soon { background: #fff3bf; }
+.late { background: #ffd6d6; }
+.diff { background: #ffd8a8; }
+
+/* 数量差异的醒目提示框 */
+.alert {
+  background: #ffd8a8;
+  border-left: 6px solid #e8590c;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 18px;
+  font-weight: bold;
+}
+.alert-sub { font-size: 14px; font-weight: normal; margin-top: 4px; }
 
 .card { background: #fff; border-radius: 8px; padding: 12px 16px; margin-bottom: 12px; }
 .card dl { display: grid; grid-template-columns: 8em 1fr; gap: 4px 8px; margin: 0; }
 .card dt { color: #666; }
 .card dd { margin: 0; }
-.diff { color: #c92a2a; font-weight: bold; }
 
 label { display: block; margin: 10px 0 4px; font-size: 14px; color: #444; }
 input[type=text], input[type=number], input[type=date], input[type=tel] {
@@ -71,6 +84,8 @@ button, .btn {
 }
 .bar button { padding: 6px 10px; font-size: 14px; margin: 0; }
 button.secondary { background: #868e96; }
+input:disabled { background: #eee; color: #888; }
+button:disabled { background: #ccc; color: #666; cursor: not-allowed; }
 .muted { color: #888; font-size: 14px; }
 
 /* 手机：表格改成卡片式 */

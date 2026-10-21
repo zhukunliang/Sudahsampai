@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>订单列表</h1>
-<p class="legend"><span class="soon">黄色 = 快到期</span><span class="late">红色 = 逾期</span></p>
+<p class="legend"><span class="soon">黄色 = 快到期</span><span class="late">红色 = 逾期</span><span class="diff">橙色 = 数量有差异</span></p>
 <table>
   <thead>
     <tr>
@@ -17,7 +17,7 @@
       <td data-label="数量">{{ o.quantity }} {{ o.unit }}</td>
       <td data-label="交货日期">{{ o.delivery_date }}</td>
       <td data-label="剩余">{{ o.days_text }}</td>
-      <td data-label="状态">{{ o.status }}</td>
+      <td data-label="状态">{{ o.status_label }}</td>
     </tr>
     {% else %}
     <tr><td colspan="7">还没有订单</td></tr>

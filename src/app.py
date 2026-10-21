@@ -15,32 +15,56 @@ db.init_db()
 
 @app.context_processor
 def inject_globals():
-    return {"sim_today": db.today().isoformat(), "role": current_role(), "roles": (OWNER, CLERK)}
+    return {"sim_today": db.today().isoformat(), "role": current_role(), "roles": (OWNER, CLERK),
+            "is_owner": current_role() == OWNER, "db": db}
+
+
+def describe_diff(quantity, received, unit):
+    """例如：少收 2 箱（订单 15，实收 13）"""
+    word = "少收" if received < quantity else "多收"
+    amount = f"{abs(received - quantity)} {unit}".strip()
+    return f"{word} {amount}（订单 {quantity}，实收 {received}）"
 
 
 def decorate(row):
-    """给订单加上剩余天数和颜色标记：逾期标红，快到期标黄。"""
+    """给订单加上：中文状态、剩余天数、颜色标记 flag，以及为什么是这个颜色 flag_reason。"""
     o = dict(row)
+    o["status_label"] = db.STATUS_LABELS[o["status"]]
     days_left = (date.fromisoformat(o["delivery_date"]) - db.today()).days
-    o["days_left"] = days_left
-    if o["status"] == db.ARRIVED:
+    remind = o["remind_days_before"]
+
+    if o["status"] in db.ISSUES:
+        o["flag"] = "diff"  # 橙色
+        o["days_text"] = "—"
+        o["flag_reason"] = "实收数量和订单不一致，需要店主处理，所以显示橙色。"
+    elif o["status"] == db.DELIVERED:
         o["flag"] = ""
         o["days_text"] = "—"
+        o["flag_reason"] = "已经送达，不再提醒，所以不标颜色。"
     elif o["status"] == db.OVERDUE or days_left < 0:
-        o["flag"] = "late"
+        o["flag"] = "late"  # 红色
         o["days_text"] = f"逾期 {-days_left} 天"
-    elif days_left <= o["remind_days_before"]:
-        o["flag"] = "soon"
+        o["flag_reason"] = f"交货日期 {o['delivery_date']} 已经过了 {-days_left} 天还没收到货，所以显示红色。"
+    elif days_left <= remind:
+        o["flag"] = "soon"  # 黄色
         o["days_text"] = "今天到期" if days_left == 0 else f"还剩 {days_left} 天"
+        when = "今天就是交货日期" if days_left == 0 else f"离交货日期还有 {days_left} 天"
+        o["flag_reason"] = f"{when}，已进入「提前 {remind} 天提醒」的范围，所以显示黄色。"
     else:
         o["flag"] = ""
         o["days_text"] = f"还剩 {days_left} 天"
+        o["flag_reason"] = f"离交货日期还有 {days_left} 天，还没到「提前 {remind} 天提醒」的范围，所以不标颜色。"
 
+    # 实收数量和订单不一样时的说明文字
     o["diff_text"] = ""
-    if o["status"] == db.ARRIVED:
-        diff = o["actual_quantity"] - o["quantity"]
-        if diff:
-            o["diff_text"] = f"少到 {-diff}" if diff < 0 else f"多到 {diff}"
+    if o["received_quantity"] is not None and o["received_quantity"] != o["quantity"]:
+        o["diff_text"] = describe_diff(o["quantity"], o["received_quantity"], o["unit"])
+
+    # 迟到几天（准时或还没到货时是 0）
+    o["late_days"] = 0
+    if o["received_at"]:
+        o["late_days"] = max(0, (date.fromisoformat(o["received_at"]) -
+                                 date.fromisoformat(o["delivery_date"])).days)
     return o
 
 
@@ -158,63 +182,112 @@ def new_order():
     return redirect(url_for("index"))
 
 
-@app.route("/orders/<int:order_id>")
+@app.route("/order/<int:order_id>")
 def order_detail(order_id):
     with db.connect() as conn:
         o = decorate(get_order(conn, order_id))
     return render_template("detail.html", o=o)
 
 
-@app.route("/orders/<int:order_id>/rules", methods=["POST"])
+def deny(conn, order_row, what):
+    """店员做了只有店主能做的事：写一条 permission_denied 日志，返回 403 页面。"""
+    db.add_log(conn, current_role(), "permission_denied", f"#{order_row['id']} 店员尝试{what}，已拒绝")
+    flash(f"仅店主可以{what}", "error")
+    return render_template("detail.html", o=decorate(order_row)), 403
+
+
+@app.route("/order/<int:order_id>/rules", methods=["POST"])
 def update_rules(order_id):
     role = current_role()
     with db.connect() as conn:
         o = get_order(conn, order_id)
+        # 后端检查角色：就算有人绕过页面上禁用的输入框直接提交，也会被挡住
         if role != OWNER:
-            db.add_log(conn, role, "拒绝修改规则", f"#{order_id} 店员无权修改提醒规则")
-            flash("店员不能修改提醒规则，请切换到店主", "error")
-            return render_template("detail.html", o=decorate(o)), 403
+            return deny(conn, o, "修改提醒规则")
         try:
             remind = int(request.form["remind_days_before"])
+            if remind < 0:
+                raise ValueError
         except (KeyError, ValueError):
-            flash("提前提醒天数要填数字", "error")
+            flash("提前提醒天数要填 0 或以上的整数", "error")
             return redirect(url_for("order_detail", order_id=order_id))
         auto = 1 if request.form.get("auto_chase") else 0
         conn.execute("UPDATE orders SET remind_days_before = ?, auto_chase = ? WHERE id = ?",
                      (remind, auto, order_id))
-        db.add_log(conn, role, "修改规则",
+        db.add_log(conn, role, "rules_updated",
                    f"#{order_id} 提前提醒 {o['remind_days_before']}→{remind} 天，"
                    f"自动催货 {'开' if o['auto_chase'] else '关'}→{'开' if auto else '关'}")
     flash("提醒规则已保存", "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
 
-@app.route("/orders/<int:order_id>/receive", methods=["POST"])
+@app.route("/order/<int:order_id>/receive", methods=["POST"])
 def receive(order_id):
+    """确认收货：店主和店员都可以做。"""
     role = current_role()
     with db.connect() as conn:
         o = get_order(conn, order_id)
-        if o["status"] == db.ARRIVED:
+        if o["status"] not in db.AWAITING:
             flash("这张订单已经收过货了", "error")
             return redirect(url_for("order_detail", order_id=order_id))
         try:
-            actual = int(request.form["actual_quantity"])
+            received = int(request.form["received_quantity"])
+            if received < 0:
+                raise ValueError
         except (KeyError, ValueError):
-            flash("实际数量要填数字", "error")
+            flash("实收数量要填 0 或以上的整数", "error")
             return redirect(url_for("order_detail", order_id=order_id))
-        delivered_at = db.now().strftime("%Y-%m-%d %H:%M")
+
+        # 用模拟日期记录到货时间，并和交货日期比较，记下是否准时（以后算供应商准时率）
+        received_at = db.today()
+        on_time = received_at <= date.fromisoformat(o["delivery_date"])
+        status = db.DELIVERED if received == o["quantity"] else db.DISCREPANCY
         conn.execute(
-            "UPDATE orders SET status = ?, actual_quantity = ?, delivered_at = ? WHERE id = ?",
-            (db.ARRIVED, actual, delivered_at, order_id),
+            """UPDATE orders SET status = ?, received_quantity = ?, received_at = ?, on_time = ?
+               WHERE id = ?""",
+            (status, received, received_at.isoformat(), 1 if on_time else 0, order_id),
         )
-        db.add_log(conn, role, "确认收货", f"#{order_id} {o['product']} 实到 {actual}（订购 {o['quantity']}）")
-        diff = actual - o["quantity"]
-        if diff:
-            text = f"少到 {-diff}" if diff < 0 else f"多到 {diff}"
-            db.add_log(conn, role, "发现差异", f"#{order_id} {o['supplier']} {o['product']}：{text}")
-            flash(f"已收货，数量不一致：{text}", "error")
+        timing = "准时" if on_time else "迟到"
+        if status == db.DELIVERED:
+            db.add_log(conn, role, "received",
+                       f"#{order_id} {o['product']} 实收 {received} {o['unit']}，数量一致，{timing}")
+            flash("已确认收货，数量一致", "ok")
         else:
-            flash("已收货，数量一致", "ok")
+            text = describe_diff(o["quantity"], received, o["unit"])
+            db.add_log(conn, role, "discrepancy",
+                       f"#{order_id} {o['supplier']} {o['product']}：{text}，{timing}")
+            flash("已记录收货，但数量不一致，请店主处理", "error")
+    return redirect(url_for("order_detail", order_id=order_id))
+
+
+# 店主处理数量差异的三个选择：按钮的值 → (新状态, 日志动作, 日志说明)
+RESOLUTIONS = {
+    "accept": (db.DELIVERED, "discrepancy_accepted", "接受实收数量"),
+    "restock": (db.RESTOCK_REQUESTED, "restock_requested", "要求供应商补货"),
+    "negotiate": (db.NEGOTIATING, "negotiating", "标记为待协商"),
+}
+
+
+@app.route("/order/<int:order_id>/resolve", methods=["POST"])
+def resolve(order_id):
+    role = current_role()
+    with db.connect() as conn:
+        o = get_order(conn, order_id)
+        if role != OWNER:
+            return deny(conn, o, "处理数量差异")
+        if o["status"] not in db.ISSUES:
+            flash("这张订单没有需要处理的数量差异", "error")
+            return redirect(url_for("order_detail", order_id=order_id))
+        choice = request.form.get("choice")
+        if choice not in RESOLUTIONS:
+            flash("请选择一个处理方式", "error")
+            return redirect(url_for("order_detail", order_id=order_id))
+
+        new_status, action, label = RESOLUTIONS[choice]
+        conn.execute("UPDATE orders SET status = ? WHERE id = ?", (new_status, order_id))
+        text = describe_diff(o["quantity"], o["received_quantity"], o["unit"])
+        db.add_log(conn, role, action, f"#{order_id} {o['product']}（{text}）：{label}")
+    flash(f"已{label}", "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
 
