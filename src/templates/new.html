@@ -1,27 +1,43 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>新增订单</h1>
+
+{% if errors %}
+<div class="flash error">
+  <b>请先修改以下问题：</b>
+  <ul>
+    {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <form method="post" class="card">
   <label for="supplier">供应商名</label>
-  <input type="text" id="supplier" name="supplier" required value="{{ form.supplier }}">
+  <input type="text" id="supplier" name="supplier" value="{{ form.supplier }}">
 
-  <label for="whatsapp">WhatsApp 号码</label>
-  <input type="tel" id="whatsapp" name="whatsapp" required placeholder="+60 12-345 6789" value="{{ form.whatsapp }}">
+  <label for="whatsapp">供应商 WhatsApp</label>
+  <input type="tel" id="whatsapp" name="whatsapp" placeholder="+60 12-345 6789" value="{{ form.whatsapp }}">
 
-  <label for="product">商品</label>
-  <input type="text" id="product" name="product" required value="{{ form.product }}">
+  <label for="product">商品名 *</label>
+  <input type="text" id="product" name="product" value="{{ form.product }}">
 
-  <label for="quantity">数量</label>
-  <input type="number" id="quantity" name="quantity" min="1" required value="{{ form.quantity }}">
+  <label for="category">类别</label>
+  <input type="text" id="category" name="category" placeholder="如：蔬菜、蛋奶、主食" value="{{ form.category }}">
 
-  <label for="delivery_date">交货日期</label>
-  <input type="date" id="delivery_date" name="delivery_date" required value="{{ form.delivery_date }}">
+  <label for="quantity">数量 *（大于 0）</label>
+  <input type="number" id="quantity" name="quantity" value="{{ form.quantity }}">
 
-  <label for="shelf_life_days">保质期（天）</label>
-  <input type="number" id="shelf_life_days" name="shelf_life_days" min="0" required value="{{ form.shelf_life_days }}">
+  <label for="unit">单位</label>
+  <input type="text" id="unit" name="unit" placeholder="如：箱、包、kg" value="{{ form.unit }}">
+
+  <label for="delivery_date">交货日期 *</label>
+  <input type="date" id="delivery_date" name="delivery_date" value="{{ form.delivery_date }}">
+
+  <label for="expiry_date">保质期（可选）</label>
+  <input type="date" id="expiry_date" name="expiry_date" value="{{ form.expiry_date }}">
 
   <label for="remind_days_before">提前几天提醒</label>
-  <input type="number" id="remind_days_before" name="remind_days_before" min="0" required value="{{ form.remind_days_before }}">
+  <input type="number" id="remind_days_before" name="remind_days_before" value="{{ form.remind_days_before }}">
 
   <label class="check">
     <input type="checkbox" name="auto_chase" value="1" {% if form.auto_chase %}checked{% endif %}>

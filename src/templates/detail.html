@@ -7,9 +7,10 @@
     <dt>供应商</dt><dd>{{ o.supplier }}</dd>
     <dt>WhatsApp</dt><dd>{{ o.whatsapp }}</dd>
     <dt>商品</dt><dd>{{ o.product }}</dd>
-    <dt>订购数量</dt><dd>{{ o.quantity }}</dd>
+    <dt>类别</dt><dd>{{ o.category or "—" }}</dd>
+    <dt>订购数量</dt><dd>{{ o.quantity }} {{ o.unit }}</dd>
     <dt>交货日期</dt><dd>{{ o.delivery_date }}（{{ o.days_text }}）</dd>
-    <dt>保质期</dt><dd>{{ o.shelf_life_days }} 天{% if o.expires_on %}，到 {{ o.expires_on }} 过期{% endif %}</dd>
+    <dt>保质期</dt><dd>{{ o.expiry_date or "未填写" }}</dd>
     <dt>状态</dt><dd>{{ o.status }}</dd>
     {% if o.status == "已到货" %}
     <dt>实际到货</dt><dd>{{ o.actual_quantity }}</dd>

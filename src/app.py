@@ -1,6 +1,6 @@
 import os
 import secrets
-from datetime import date, timedelta
+from datetime import date
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 
@@ -37,13 +37,10 @@ def decorate(row):
         o["days_text"] = f"还剩 {days_left} 天"
 
     o["diff_text"] = ""
-    o["expires_on"] = ""
     if o["status"] == db.ARRIVED:
         diff = o["actual_quantity"] - o["quantity"]
         if diff:
             o["diff_text"] = f"少到 {-diff}" if diff < 0 else f"多到 {diff}"
-        arrived_on = date.fromisoformat(o["delivered_at"][:10])
-        o["expires_on"] = (arrived_on + timedelta(days=o["shelf_life_days"])).isoformat()
     return o
 
 
@@ -81,41 +78,82 @@ def switch_role():
     return redirect(request.referrer or url_for("index"))
 
 
+ORDER_FIELDS = ["supplier", "whatsapp", "product", "category", "quantity", "unit",
+                "delivery_date", "expiry_date", "remind_days_before"]
+
+
+def read_order_form(form):
+    """把表单原样读出来（去掉首尾空格），出错时用来回填。"""
+    data = {name: form.get(name, "").strip() for name in ORDER_FIELDS}
+    data["auto_chase"] = form.get("auto_chase") == "1"
+    return data
+
+
+def validate_order(data):
+    """检查表单，返回错误列表；没有错误就返回空列表。顺便把数字和日期转换好。"""
+    errors = []
+
+    if not data["product"]:
+        errors.append("商品名不能为空")
+
+    try:
+        data["quantity"] = int(data["quantity"])
+        if data["quantity"] <= 0:
+            errors.append("数量必须大于 0")
+    except ValueError:
+        errors.append("数量必须是整数")
+
+    if not data["delivery_date"]:
+        errors.append("交货日期不能为空")
+    else:
+        try:
+            date.fromisoformat(data["delivery_date"])
+        except ValueError:
+            errors.append("交货日期格式不对")
+
+    if data["expiry_date"]:  # 保质期可以不填，填了就要是正确的日期
+        try:
+            date.fromisoformat(data["expiry_date"])
+        except ValueError:
+            errors.append("保质期格式不对")
+
+    try:
+        data["remind_days_before"] = int(data["remind_days_before"] or 1)
+        if data["remind_days_before"] < 0:
+            errors.append("提前提醒天数不能是负数")
+    except ValueError:
+        errors.append("提前提醒天数必须是整数")
+
+    return errors
+
+
 @app.route("/orders/new", methods=["GET", "POST"])
 def new_order():
     if request.method == "GET":
-        form = {
-            "supplier": "", "whatsapp": "", "product": "", "quantity": "",
-            "delivery_date": (db.today() + timedelta(days=3)).isoformat(),
-            "shelf_life_days": 30, "remind_days_before": 1, "auto_chase": True,
-        }
-        return render_template("new.html", form=form)
+        empty = {name: "" for name in ORDER_FIELDS}
+        empty.update(remind_days_before=1, auto_chase=True)  # 默认提前 1 天提醒，默认开启自动催货
+        return render_template("new.html", form=empty, errors=[])
 
-    f = request.form
-    try:
-        values = (
-            f["supplier"].strip(), f["whatsapp"].strip(), f["product"].strip(),
-            int(f["quantity"]), date.fromisoformat(f["delivery_date"]).isoformat(),
-            int(f["shelf_life_days"]), int(f["remind_days_before"]),
-            1 if f.get("auto_chase") else 0,
-        )
-    except (KeyError, ValueError):
-        flash("表单有误，请检查数字和日期", "error")
-        return render_template("new.html", form=f), 400
-    if not all(values[:3]):
-        flash("供应商、WhatsApp、商品不能为空", "error")
-        return render_template("new.html", form=f), 400
+    data = read_order_form(request.form)
+    errors = validate_order(data)
+    if errors:
+        # 400 = 请求有误；把已填写的内容 data 传回去，表单不会被清空
+        return render_template("new.html", form=data, errors=errors), 400
 
     with db.connect() as conn:
         cur = conn.execute(
-            """INSERT INTO orders (supplier, whatsapp, product, quantity, delivery_date,
-                   shelf_life_days, remind_days_before, auto_chase)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            values,
+            """INSERT INTO orders (supplier, whatsapp, product, category, quantity, unit,
+                   delivery_date, expiry_date, remind_days_before, auto_chase)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (data["supplier"], data["whatsapp"], data["product"], data["category"],
+             data["quantity"], data["unit"], data["delivery_date"],
+             data["expiry_date"] or None, data["remind_days_before"], 1 if data["auto_chase"] else 0),
         )
         order_id = cur.lastrowid
+        # 日志：role 列记录"谁"，内容记录"新增了什么"
         db.add_log(conn, current_role(), "新增订单",
-                   f"#{order_id} {values[0]}：{values[2]} × {values[3]}，交货 {values[4]}")
+                   f"#{order_id} 向 {data['supplier'] or '（未填供应商）'} 订 {data['product']} "
+                   f"{data['quantity']} {data['unit']}，交货 {data['delivery_date']}")
     flash(f"已新增订单 #{order_id}", "ok")
     return redirect(url_for("index"))
 

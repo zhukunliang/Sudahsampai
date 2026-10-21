@@ -20,11 +20,13 @@ CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     supplier TEXT NOT NULL,              -- 供应商名
     whatsapp TEXT NOT NULL,              -- WhatsApp 号码
-    product TEXT NOT NULL,               -- 商品
+    product TEXT NOT NULL,               -- 商品名
+    category TEXT NOT NULL DEFAULT '',   -- 类别
     quantity INTEGER NOT NULL,           -- 数量
+    unit TEXT NOT NULL DEFAULT '',       -- 单位（包、箱、kg……）
     delivery_date TEXT NOT NULL,         -- 交货日期 YYYY-MM-DD
-    shelf_life_days INTEGER NOT NULL,    -- 保质期（天）
-    remind_days_before INTEGER NOT NULL, -- 提前几天提醒
+    expiry_date TEXT,                    -- 保质期到期日 YYYY-MM-DD，可以不填
+    remind_days_before INTEGER NOT NULL DEFAULT 1, -- 提前几天提醒
     auto_chase INTEGER NOT NULL DEFAULT 0, -- 是否自动催货 0/1
     status TEXT NOT NULL DEFAULT '待送达', -- 待送达 / 已到货 / 逾期
     actual_quantity INTEGER,             -- 实际到货数量
@@ -86,22 +88,27 @@ def seed(conn):
     t = today()
     d = lambda n: (t + timedelta(days=n)).isoformat()
     rows = [
-        # 供应商, WhatsApp, 商品, 数量, 交货日期, 保质期, 提前提醒, 自动催货, 状态, 实到, 送达时间
-        ("Kedai Borong Ah Seng", "+60 12-000 1001", "大米 10kg", 20, d(5), 365, 2, 1, PENDING, None, None),
-        ("Segar Sayur Sdn Bhd", "+60 12-000 1002", "青菜（箱）", 15, d(1), 5, 2, 1, PENDING, None, None),
-        ("Mewah Minyak Trading", "+60 12-000 1003", "食用油 5L", 30, d(2), 540, 3, 0, PENDING, None, None),
-        ("Roti Pagi Bakery", "+60 12-000 1004", "白面包", 40, d(-2), 4, 1, 1, OVERDUE, None, None),
-        ("Telur Emas Farm", "+60 12-000 1005", "鸡蛋（盘）", 25, d(-1), 21, 1, 0, ARRIVED, 25,
-         (t - timedelta(days=1)).isoformat() + " 09:30"),
-        ("Susu Segar Dairy", "+60 12-000 1006", "鲜奶 1L", 48, d(-3), 7, 1, 1, ARRIVED, 44,
-         (t - timedelta(days=3)).isoformat() + " 10:15"),
-        ("Gula Manis Supplies", "+60 12-000 1007", "白糖 1kg", 50, d(9), 720, 3, 0, PENDING, None, None),
+        # 供应商, WhatsApp, 商品, 类别, 数量, 单位, 交货日期, 保质期, 提前提醒, 自动催货, 状态, 实到, 送达时间
+        ("Kedai Borong Ah Seng", "+60 12-000 1001", "大米 10kg", "主食", 20, "包", d(5), d(365), 2, 1,
+         PENDING, None, None),
+        ("Segar Sayur Sdn Bhd", "+60 12-000 1002", "青菜", "蔬菜", 15, "箱", d(1), d(6), 2, 1,
+         PENDING, None, None),
+        ("Mewah Minyak Trading", "+60 12-000 1003", "食用油 5L", "油和调料", 30, "桶", d(2), d(540), 3, 0,
+         PENDING, None, None),
+        ("Roti Pagi Bakery", "+60 12-000 1004", "白面包", "烘焙", 40, "条", d(-2), d(2), 1, 1,
+         OVERDUE, None, None),
+        ("Telur Emas Farm", "+60 12-000 1005", "鸡蛋", "蛋奶", 25, "盘", d(-1), d(20), 1, 0,
+         ARRIVED, 25, (t - timedelta(days=1)).isoformat() + " 09:30"),
+        ("Susu Segar Dairy", "+60 12-000 1006", "鲜奶 1L", "蛋奶", 48, "瓶", d(-3), d(4), 1, 1,
+         ARRIVED, 44, (t - timedelta(days=3)).isoformat() + " 10:15"),
+        ("Gula Manis Supplies", "+60 12-000 1007", "白糖 1kg", "油和调料", 50, "包", d(9), None, 3, 0,
+         PENDING, None, None),
     ]
     conn.executemany(
-        """INSERT INTO orders (supplier, whatsapp, product, quantity, delivery_date,
-               shelf_life_days, remind_days_before, auto_chase, status,
+        """INSERT INTO orders (supplier, whatsapp, product, category, quantity, unit,
+               delivery_date, expiry_date, remind_days_before, auto_chase, status,
                actual_quantity, delivered_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
     add_log(conn, "系统", "初始化", f"写入 {len(rows)} 张合成订单")
@@ -109,6 +116,11 @@ def seed(conn):
 
 def init_db():
     with connect() as conn:
+        # 旧版本的 orders 表没有 category 列：演示数据直接丢掉，按新结构重建
+        columns = [r["name"] for r in conn.execute("PRAGMA table_info(orders)")]
+        if columns and "category" not in columns:
+            conn.execute("DROP TABLE orders")
+            conn.execute("DROP TABLE IF EXISTS logs")
         conn.executescript(SCHEMA)
         if conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0:
             seed(conn)
