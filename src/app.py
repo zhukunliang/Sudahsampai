@@ -79,9 +79,12 @@ def get_order(conn, order_id):
 
 @app.route("/")
 def index():
+    # 刚快进过的话，取出这次快进触发的事件做摘要；pop 表示只显示一次，刷新后就不再显示
+    ff_log_id = session.pop("ff_log_id", None)
     with db.connect() as conn:
         rows = conn.execute("SELECT * FROM orders ORDER BY delivery_date, id").fetchall()
-    return render_template("index.html", orders=[decorate(r) for r in rows])
+        events = db.get_events_after(conn, ff_log_id) if ff_log_id else None
+    return render_template("index.html", orders=[decorate(r) for r in rows], events=events)
 
 
 # ---------- 角色和权限 ----------
@@ -319,36 +322,64 @@ def resolve(order_id):
     return redirect(url_for("order_detail", order_id=order_id))
 
 
+def chase_message(o):
+    """生成礼貌的英文 + 马来文催货消息模板（第二版会通过 WhatsApp 发给供应商）。"""
+    supplier = o["supplier"] or "Supplier"
+    amount = f"{o['quantity']} {o['unit']}".strip()
+    english = (
+        f"Hello {supplier}, this is a friendly reminder about our order #{o['id']}: "
+        f"{amount} of {o['product']}, originally scheduled for delivery on {o['delivery_date']}. "
+        f"We have not received it yet. Could you please let us know the new delivery date? Thank you!"
+    )
+    malay = (
+        f"Salam sejahtera {supplier}, ini peringatan mesra mengenai pesanan kami #{o['id']}: "
+        f"{o['product']} sebanyak {amount}, yang dijadualkan untuk dihantar pada {o['delivery_date']}. "
+        f"Kami masih belum menerimanya. Boleh maklumkan tarikh penghantaran yang baharu? Terima kasih!"
+    )
+    return f"{english}\n\n{malay}"
+
+
 @app.route("/time/forward", methods=["POST"])
 def time_forward():
-    """模拟时间快进 1 天，然后检查待送达订单：进入提醒窗口的写提醒，过了交货日期的改成逾期。"""
+    """模拟日期加 1 天，然后检查还没到货的订单：
+    - 待送达、进入提醒范围 → 写 reminder 日志
+    - 过了交货日期 → 改成逾期；开了自动催货就写 auto_chase 日志（附催货消息），没开就写一条说明
+    - 已经逾期的订单，开了自动催货的话每天再催一次，但同一天不重复催"""
     role = current_role()
     db.set_offset(db.get_offset() + 1)
     t = db.today()
-    reminders = overdue = 0
     with db.connect() as conn:
-        db.add_log(conn, role, "time_forward", f"模拟日期推进到 {t.isoformat()}")
-        rows = conn.execute("SELECT * FROM orders WHERE status = ?", (db.PENDING,)).fetchall()
+        ff_log_id = db.add_log(conn, role, "time_forward", f"模拟日期推进到 {t.isoformat()}")
+        rows = conn.execute("SELECT * FROM orders WHERE status IN (?, ?)",
+                            (db.PENDING, db.OVERDUE)).fetchall()
         for o in rows:
             days_left = (date.fromisoformat(o["delivery_date"]) - t).days
-            if days_left < 0:
+
+            if days_left >= 0:
+                # 还没到交货日期：进入提醒范围才提醒
+                if days_left <= o["remind_days_before"]:
+                    db.add_log(conn, "系统", "reminder",
+                               f"提醒店主：#{o['id']} {o['product']}预计 {o['delivery_date'][5:]} 送达", o["id"])
+                continue
+
+            # 已经过了交货日期
+            newly_overdue = o["status"] == db.PENDING
+            if newly_overdue:
                 conn.execute("UPDATE orders SET status = ? WHERE id = ?", (db.OVERDUE, o["id"]))
+            if o["auto_chase"]:
+                # 同一张订单同一天不重复催：先查今天有没有催过
+                if not db.has_log(conn, o["id"], "auto_chase", t.isoformat()):
+                    db.add_log(conn, "系统", "auto_chase",
+                               f"#{o['id']} 已逾期 {-days_left} 天，已生成催货消息"
+                               f"（发往 WhatsApp {o['whatsapp'] or '未填'}，第二版实际发送）：\n\n{chase_message(o)}",
+                               o["id"])
+            elif newly_overdue:
                 db.add_log(conn, "系统", "overdue",
-                           f"#{o['id']} {o['supplier']} {o['product']} 应于 {o['delivery_date']} 送达，"
-                           f"已逾期 {-days_left} 天", o["id"])
-                if o["auto_chase"]:
-                    # 只记录"该催货了"，真正发 WhatsApp 是第二版的功能
-                    db.add_log(conn, "系统", "chase",
-                               f"#{o['id']} 已逾期且开启了自动催货：需要通过 WhatsApp {o['whatsapp']} "
-                               f"催 {o['supplier']}（发送功能第二版实现）", o["id"])
-                overdue += 1
-            elif days_left <= o["remind_days_before"]:
-                when = "今天到期" if days_left == 0 else f"{days_left} 天后到期"
-                db.add_log(conn, "系统", "reminder",
-                           f"#{o['id']} {o['supplier']} {o['product']} {when}", o["id"])
-                reminders += 1
-    flash(f"已快进到 {t.isoformat()}：{reminders} 条到期提醒，{overdue} 张新逾期", "ok")
-    return redirect(back_url())
+                           f"#{o['id']} {o['product']} 已逾期，按店主设置未自动催货", o["id"])
+
+    # 记住这次快进的日志编号，首页据此显示"这次快进触发了哪些事件"
+    session["ff_log_id"] = ff_log_id
+    return redirect(url_for("index"))
 
 
 @app.route("/reset", methods=["POST"])

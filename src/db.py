@@ -40,7 +40,7 @@ ACTION_TAGS = {
     "order_created": ("新增", "blue"),
     "reminder": ("提醒", "yellow"),
     "overdue": ("提醒", "yellow"),
-    "chase": ("催货", "red"),
+    "auto_chase": ("催货", "red"),
     "received": ("收货", "green"),
     "discrepancy": ("差异", "orange"),
     "discrepancy_accepted": ("差异", "orange"),
@@ -110,13 +110,33 @@ def today():
 # ---------- 日志 ----------
 
 def add_log(conn, role, action, detail, order_id=None):
-    """写一条日志：同时记下真实时间和当时的模拟日期。"""
-    conn.execute(
+    """写一条日志：同时记下真实时间和当时的模拟日期。返回这条日志的 id。"""
+    cur = conn.execute(
         """INSERT INTO logs (timestamp, sim_date, role, action, detail, order_id)
            VALUES (?, ?, ?, ?, ?, ?)""",
         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), today().isoformat(),
          role, action, detail, order_id),
     )
+    return cur.lastrowid
+
+
+def has_log(conn, order_id, action, sim_date):
+    """这张订单在这个模拟日期是不是已经有过这种日志（用来防止同一天重复催货）。"""
+    row = conn.execute(
+        "SELECT 1 FROM logs WHERE order_id = ? AND action = ? AND sim_date = ? LIMIT 1",
+        (order_id, action, sim_date),
+    ).fetchone()
+    return row is not None
+
+
+def with_tags(rows):
+    """给每条日志贴上标签文字和颜色。"""
+    logs = []
+    for r in rows:
+        log = dict(r)
+        log["tag"], log["color"] = ACTION_TAGS.get(log["action"], OTHER_TAG)
+        logs.append(log)
+    return logs
 
 
 def get_logs(conn, order_id=None):
@@ -127,12 +147,20 @@ def get_logs(conn, order_id=None):
     else:
         rows = conn.execute("SELECT * FROM logs WHERE order_id = ? ORDER BY id DESC",
                             (order_id,)).fetchall()
-    logs = []
-    for r in rows:
-        log = dict(r)
-        log["tag"], log["color"] = ACTION_TAGS.get(log["action"], OTHER_TAG)
-        logs.append(log)
-    return logs
+    return with_tags(rows)
+
+
+# 快进时会触发的事件
+EVENT_ACTIONS = ("reminder", "overdue", "auto_chase")
+
+
+def get_events_after(conn, log_id):
+    """取某条日志之后产生的提醒、逾期、催货事件，按发生顺序排列（给快进摘要用）。"""
+    rows = conn.execute(
+        "SELECT * FROM logs WHERE id > ? AND action IN (?, ?, ?) ORDER BY id",
+        (log_id, *EVENT_ACTIONS),
+    ).fetchall()
+    return with_tags(rows)
 
 
 # ---------- 合成数据 ----------

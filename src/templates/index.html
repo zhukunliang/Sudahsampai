@@ -1,5 +1,39 @@
 {% extends "base.html" %}
 {% block content %}
+
+{# 刚点过"快进 1 天"时，在顶部显示这次触发了哪些事件 #}
+{% if events is not none %}
+<div class="card ff-summary">
+  <h2>已快进到 {{ sim_today }}</h2>
+  {% set reminders = events|selectattr("action", "equalto", "reminder")|list %}
+  {% set chases = events|selectattr("action", "equalto", "auto_chase")|list %}
+  {% set unchased = events|selectattr("action", "equalto", "overdue")|list %}
+  <p>
+    提醒 <b>{{ reminders|length }}</b> 条 ·
+    自动催货 <b>{{ chases|length }}</b> 条 ·
+    逾期未催 <b>{{ unchased|length }}</b> 条
+  </p>
+  {% if events %}
+  <ul class="events">
+    {% for e in events %}
+    <li>
+      <span class="log-tag log-{{ e.color }}">{{ e.tag }}</span>
+      <a href="{{ url_for('order_detail', order_id=e.order_id) }}">#{{ e.order_id }}</a>
+      {% if e.action == "auto_chase" %}
+        已逾期，已生成催货消息
+        <details><summary>查看消息</summary><div class="message">{{ e.detail }}</div></details>
+      {% else %}
+        {{ e.detail }}
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">这一天没有新的提醒或逾期。</p>
+  {% endif %}
+</div>
+{% endif %}
+
 <h1>订单列表</h1>
 <p class="legend"><span class="soon">黄色 = 快到期</span><span class="late">红色 = 逾期</span><span class="diff">橙色 = 数量有差异</span></p>
 <table>
