@@ -1,6 +1,8 @@
 import os
 import secrets
 from datetime import date
+from functools import wraps
+from urllib.parse import urlparse
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 
@@ -82,24 +84,59 @@ def index():
     return render_template("index.html", orders=[decorate(r) for r in rows])
 
 
+# ---------- 角色和权限 ----------
+
 OWNER = "店主"
 CLERK = "店员"
 
 
 def current_role():
-    return session.get("role", OWNER)
+    """当前角色存在 session（签名过的 cookie）里。还没选过时默认店主，方便演示；
+    万一读到不认识的值，按权限最小的店员处理。"""
+    role = session.get("role", OWNER)
+    return role if role in (OWNER, CLERK) else CLERK
+
+
+def back_url():
+    """操作完回到上一页。只接受本站的地址，防止被人利用跳到别的网站。"""
+    ref = request.referrer
+    if ref and urlparse(ref).netloc == request.host:
+        return ref
+    return url_for("index")
+
+
+def owner_required(what):
+    """装饰器：被它包住的路由只有店主能用。what 是给用户看的操作名称，比如"修改提醒规则"。
+    店员访问时不执行原来的函数，而是写一条 permission_denied 日志，显示统一的提示页（403）。"""
+    def decorator(view):
+        @wraps(view)  # 保留原函数的名字，url_for 才能照常找到它
+        def wrapper(*args, **kwargs):
+            if current_role() != OWNER:
+                order_id = kwargs.get("order_id")  # 订单相关的路由会带 order_id，日志就能关联到订单
+                prefix = f"#{order_id} " if order_id else ""
+                with db.connect() as conn:
+                    db.add_log(conn, current_role(), "permission_denied",
+                               f"{prefix}{current_role()}尝试{what}，已拒绝", order_id)
+                back = url_for("order_detail", order_id=order_id) if order_id else url_for("index")
+                return render_template("denied.html", what=what, back=back), 403
+            return view(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 @app.route("/role", methods=["POST"])
 def switch_role():
+    """切换角色（模拟登录）。每次切换都写日志。"""
     role = request.form.get("role")
-    if role in (OWNER, CLERK) and role != current_role():
+    if role not in (OWNER, CLERK):
+        flash("没有这个角色", "error")
+    elif role != current_role():
         old = current_role()
         session["role"] = role
         with db.connect() as conn:
             db.add_log(conn, role, "role_switched", f"{old} → {role}")
         flash(f"已切换为{role}", "ok")
-    return redirect(request.referrer or url_for("index"))
+    return redirect(back_url())
 
 
 ORDER_FIELDS = ["supplier", "whatsapp", "product", "category", "quantity", "unit",
@@ -190,23 +227,12 @@ def order_detail(order_id):
     return render_template("detail.html", o=o, logs=logs)
 
 
-def deny(conn, order_row, what):
-    """店员做了只有店主能做的事：写一条 permission_denied 日志，返回 403 页面。"""
-    db.add_log(conn, current_role(), "permission_denied",
-               f"#{order_row['id']} 店员尝试{what}，已拒绝", order_row["id"])
-    flash(f"仅店主可以{what}", "error")
-    logs = db.get_logs(conn, order_row["id"])
-    return render_template("detail.html", o=decorate(order_row), logs=logs), 403
-
-
 @app.route("/order/<int:order_id>/rules", methods=["POST"])
+@owner_required("修改提醒规则")  # 后端检查：就算绕过页面上禁用的输入框直接提交，也会被挡住
 def update_rules(order_id):
     role = current_role()
     with db.connect() as conn:
         o = get_order(conn, order_id)
-        # 后端检查角色：就算有人绕过页面上禁用的输入框直接提交，也会被挡住
-        if role != OWNER:
-            return deny(conn, o, "修改提醒规则")
         try:
             remind = int(request.form["remind_days_before"])
             if remind < 0:
@@ -272,12 +298,11 @@ RESOLUTIONS = {
 
 
 @app.route("/order/<int:order_id>/resolve", methods=["POST"])
+@owner_required("处理数量差异")
 def resolve(order_id):
     role = current_role()
     with db.connect() as conn:
         o = get_order(conn, order_id)
-        if role != OWNER:
-            return deny(conn, o, "处理数量差异")
         if o["status"] not in db.ISSUES:
             flash("这张订单没有需要处理的数量差异", "error")
             return redirect(url_for("order_detail", order_id=order_id))
@@ -323,10 +348,11 @@ def time_forward():
                            f"#{o['id']} {o['supplier']} {o['product']} {when}", o["id"])
                 reminders += 1
     flash(f"已快进到 {t.isoformat()}：{reminders} 条到期提醒，{overdue} 张新逾期", "ok")
-    return redirect(request.referrer or url_for("index"))
+    return redirect(back_url())
 
 
 @app.route("/reset", methods=["POST"])
+@owner_required("重置演示数据")  # 会清空所有订单和日志，只能店主做
 def reset():
     db.reset_db()
     flash("演示数据已重置", "ok")
