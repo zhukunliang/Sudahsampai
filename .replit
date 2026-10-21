@@ -8,6 +8,7 @@ channel = "stable-25_05"
 deploymentTarget = "vm"
 build = ["pip", "install", "-r", "requirements.txt"]
 run = ["python", "src/app.py"]
+ignorePorts = false
 
 [[ports]]
 localPort = 5000
