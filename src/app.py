@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import date, timedelta
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
@@ -6,8 +7,9 @@ from flask import Flask, abort, flash, redirect, render_template, request, sessi
 import db
 
 app = Flask(__name__)
-# 只用于 flash 消息和角色切换的 cookie 签名，演示用；部署时可在 Replit Secrets 里设置 SECRET_KEY
-app.secret_key = os.environ.get("SECRET_KEY", "sdc-demo-only")
+# session 签名用的密钥：从环境变量读（Replit 的 Secrets 里设置 SECRET_KEY）。
+# 没设置时每次启动随机生成一个，代码里不写任何密钥。
+app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 db.init_db()
 
 
