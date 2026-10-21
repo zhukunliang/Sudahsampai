@@ -1,5 +1,5 @@
-modules = ["python-3.11"]
-run = "pip install -r requirements.txt && python app.py"
+modules = ["python-3.12"]
+run = "pip install -r requirements.txt && python src/app.py"
 
 [nix]
 channel = "stable-24_05"
@@ -7,7 +7,7 @@ channel = "stable-24_05"
 [deployment]
 deploymentTarget = "vm"
 build = ["pip", "install", "-r", "requirements.txt"]
-run = ["python", "app.py"]
+run = ["python", "src/app.py"]
 
 [[ports]]
 localPort = 5000

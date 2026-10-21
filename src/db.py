@@ -3,10 +3,13 @@ import os
 import sqlite3
 from datetime import date, datetime, timedelta
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "sdc.db")
+# 项目根目录 = src/ 的上一级；数据库等运行时文件都放在 data/ 里
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(ROOT_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, "sdc.db")
 # 模拟时间的偏移天数单独存文件，数据库保持只有 2 张表
-SIM_PATH = os.path.join(BASE_DIR, "sim_state.json")
+SIM_PATH = os.path.join(DATA_DIR, "sim_state.json")
 
 PENDING = "待送达"
 ARRIVED = "已到货"
