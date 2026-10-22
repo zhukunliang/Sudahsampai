@@ -7,9 +7,11 @@ from datetime import date, datetime, timedelta, timezone
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
-DB_PATH = os.path.join(DATA_DIR, "sdc.db")
+# 数据库和模拟日期文件的位置可以用环境变量改（测试时指向临时文件，不碰真实数据）；
+# 没设置时用 data/ 下的默认位置
+DB_PATH = os.environ.get("SDC_DB_PATH") or os.path.join(DATA_DIR, "sdc.db")
 # 当前模拟日期单独存一个小文件，数据库保持只有 2 张表
-SIM_PATH = os.path.join(DATA_DIR, "sim_state.json")
+SIM_PATH = os.environ.get("SDC_SIM_PATH") or os.path.join(DATA_DIR, "sim_state.json")
 # 合成订单数据（队友可以直接编辑这个文件）
 SEED_PATH = os.path.join(DATA_DIR, "seed_orders.json")
 # 演示的起始日期：第一次启动和重置后，模拟日期都是这一天
