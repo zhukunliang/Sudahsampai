@@ -40,20 +40,92 @@ class RuleModeTest(unittest.TestCase):
     def test_no_api_key_uses_rule_mode(self):
         parsed = self.parse("Ok boss, 明天 sampai on time")
         self.assertEqual(parsed["mode"], "rules")
-        self.assertIn("规则模式", parsed["mode_note"])
-        self.assertIn("AI_API_KEY", parsed["mode_note"])  # 告诉用户缺的是哪个变量（只有名字，不是值）
+        self.assertEqual(parsed["mode_note"], "Offline rules (AI unavailable)")
+        self.assertNotIn("AI_", parsed["mode_note"] + parsed["mode_reason"])  # 页面和日志都不出现环境变量名
 
     def test_partly_configured_still_uses_rule_mode(self):
         env = dict(FAKE_AI_ENV, AI_MODEL="")
         with mock.patch.dict(os.environ, env):
             parsed = ai_parser.parse_reply("Ok boss", ORDER, TODAY)
         self.assertEqual(parsed["mode"], "rules")
-        self.assertIn("AI_MODEL", parsed["mode_note"])
+        self.assertEqual(parsed["mode_reason"], "AI not configured")
+
+    # ---- 这次修复的 bug：以前被判成 confirm，日期和数量都是空的 ----
+
+    def test_bug_report_message_is_partial_with_date_and_quantity(self):
+        parsed = self.parse("Boss sorry ya, lori rosak. Jumaat baru boleh hantar, 12 kotak je dulu")
+        r = parsed["result"]
+        self.assertEqual(r["intent"], "partial")           # 有"je"、12 < 15 → 少货；"baru boleh hantar" → 也延期
+        self.assertEqual(r["quantity"], 12)
+        self.assertEqual(r["new_delivery_date"], "2026-10-23")  # Jumaat → 10-21 之后的星期五
+        self.assertGreaterEqual(r["confidence"], 0.6)
+        self.assertFalse(parsed["needs_review"])
+
+    # ---- data/sample_replies.json 的 5 条样例 ----
 
     def test_every_sample_reply_gets_the_expected_intent(self):
         for sample in SAMPLES:
             with self.subTest(sample=sample["label"]):
                 self.assertEqual(self.parse(sample["text"])["result"]["intent"], sample["expected_intent"])
+
+    def test_sample_values(self):
+        by_intent = {s["expected_intent"]: self.parse(s["text"]) for s in SAMPLES}
+        self.assertEqual(by_intent["delay"]["result"]["new_delivery_date"], "2026-10-23")
+        self.assertEqual(by_intent["partial"]["result"]["quantity"], 13)
+        self.assertEqual(by_intent["price_change"]["result"]["unit_price"], 58.0)
+        self.assertFalse(by_intent["confirm"]["needs_review"])
+        self.assertLess(by_intent["unclear"]["result"]["confidence"], 0.6)
+        self.assertTrue(by_intent["unclear"]["needs_review"])
+        for intent in ("delay", "partial", "price_change", "confirm"):
+            self.assertFalse(by_intent[intent]["needs_review"], intent)
+
+    # ---- "确认"只有在没有其他信号时才成立 ----
+
+    def test_confirm_word_with_delay_signal_is_not_confirm(self):
+        r = self.parse("Ok boss, Jumaat baru boleh hantar")["result"]
+        self.assertEqual(r["intent"], "delay")
+
+    def test_confirm_word_with_price_signal_is_price_change(self):
+        r = self.parse("ok boss, harga baru RM 60 ya")["result"]
+        self.assertEqual(r["intent"], "price_change")
+        self.assertEqual(r["unit_price"], 60.0)
+
+    def test_confirm_word_with_smaller_quantity_is_partial(self):
+        r = self.parse("ok, 10 箱 tomorrow")["result"]  # 订单 15 箱，只送 10 箱
+        self.assertEqual(r["intent"], "partial")
+        self.assertEqual(r["quantity"], 10)
+
+    def test_later_date_alone_counts_as_delay(self):
+        r = self.parse("ok boss, Jumaat sampai")["result"]  # 原定 10-22，说的 10-23 更晚
+        self.assertEqual(r["intent"], "delay")
+
+    def test_plain_confirm(self):
+        for text in ("Ok boss, no problem", "准时送到，没问题", "boleh hantar macam biasa"):
+            with self.subTest(text=text):
+                self.assertEqual(self.parse(text)["result"]["intent"], "confirm")
+
+    def test_no_confirm_word_and_no_signal_is_unclear(self):
+        for text in ("boleh hantar", "nanti saya check dulu", "jemput datang kedai"):  # "je" 不能误中 "jemput"
+            with self.subTest(text=text):
+                parsed = self.parse(text)
+                self.assertEqual(parsed["result"]["intent"], "unclear")
+                self.assertLess(parsed["result"]["confidence"], 0.6)
+                self.assertTrue(parsed["needs_review"])
+
+    def test_more_keywords(self):
+        cases = {
+            "sorry boss, 改天再送, Khamis boleh": ("delay", "new_delivery_date", "2026-10-22"),
+            "晚点送, 星期六": ("delay", "new_delivery_date", "2026-10-24"),
+            "stok kurang, 5 botol sahaja": ("partial", "quantity", 5),
+            "先送 8 box": ("partial", "quantity", 8),
+            "naik harga sikit boss": ("price_change", "unit_price", None),
+            "涨价了 RM 12.5 一箱": ("price_change", "unit_price", 12.5),
+        }
+        for text, (intent, field, value) in cases.items():
+            with self.subTest(text=text):
+                r = self.parse(text)["result"]
+                self.assertEqual(r["intent"], intent)
+                self.assertEqual(r[field], value)
 
     def test_delay_converts_jumaat_to_next_friday(self):
         r = self.parse("Bos, sorry ya hari ni tak dapat hantar. Jumaat baru sampai, ok?")["result"]
@@ -138,8 +210,15 @@ class AIModeFallbackTest(unittest.TestCase):
     def test_good_ai_result_is_used(self):
         parsed = self.parse_with_fake_model(lambda *a: dict(ValidationTest.GOOD))
         self.assertEqual(parsed["mode"], "ai")
-        self.assertIn("test-model", parsed["mode_note"])
+        self.assertEqual(parsed["mode_note"], "AI: online model")
         self.assertFalse(parsed["needs_review"])
+
+    def test_deepseek_label(self):
+        env = dict(FAKE_AI_ENV, AI_BASE_URL="https://api.deepseek.com")
+        with mock.patch.dict(os.environ, env), \
+             mock.patch.object(ai_parser, "_call_model", lambda *a: dict(ValidationTest.GOOD)):
+            parsed = ai_parser.parse_reply("Jumaat baru sampai", ORDER, TODAY)
+        self.assertEqual(parsed["mode_note"], "AI: DeepSeek")
 
     def test_timeout_falls_back_to_rules(self):
         class APITimeoutError(Exception):  # 和 openai 库里超时异常同名
@@ -149,7 +228,8 @@ class AIModeFallbackTest(unittest.TestCase):
             raise APITimeoutError("15 seconds passed")
         parsed = self.parse_with_fake_model(slow)
         self.assertEqual(parsed["mode"], "rules")
-        self.assertIn("超时", parsed["mode_note"])
+        self.assertEqual(parsed["mode_note"], "Offline rules (AI unavailable)")
+        self.assertEqual(parsed["mode_reason"], "AI timed out")
 
     def test_low_confidence_ai_result_needs_review(self):
         parsed = self.parse_with_fake_model(lambda *a: dict(ValidationTest.GOOD, confidence=0.4))
@@ -164,7 +244,7 @@ class AIModeFallbackTest(unittest.TestCase):
             raise ConnectionError("network down")
         parsed = self.parse_with_fake_model(broken)
         self.assertEqual(parsed["mode"], "rules")
-        self.assertIn("AI 调用失败", parsed["mode_note"])
+        self.assertEqual(parsed["mode_reason"], "AI error (ConnectionError)")
         self.assertEqual(parsed["result"]["new_delivery_date"], "2026-10-23")  # 规则模式照样能读出日期
 
 

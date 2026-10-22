@@ -255,12 +255,22 @@ def load_sample_replies():
 
 def suggest(o, result):
     """根据解析结果给出建议（确定性规则，不是 AI）。返回 (建议列表, 确认后会做的修改说明或 None)。"""
-    tips, change = [], None
+    tips, changes = [], []
     intent = result["intent"]
     if o["status"] not in db.AWAITING:
         return [f"这张订单已经是「{db.STATUS_LABELS[o['status']]}」，不再根据回复修改。"], None
 
-    if intent == "delay" and result["new_delivery_date"]:
+    if intent == "partial" and result["quantity"] is not None:
+        short = o["quantity"] - result["quantity"]
+        if short > 0:
+            tips.append(f"供应商这次只能送 {result['quantity']} {o['unit']}，比订单少 {short} {o['unit']}。"
+                        f"剩下的需要另外下单或跟进。")
+        else:
+            tips.append(f"供应商说送 {result['quantity']} {o['unit']}，不少于订单数量 {o['quantity']}。")
+        changes.append(f"订购数量 {o['quantity']} → {result['quantity']} {o['unit']}")
+
+    # 延期，或者少货的同时说了新日期（例如 "Jumaat baru boleh hantar, 12 kotak je"）：日期也一起改
+    if intent in ("delay", "partial") and result["new_delivery_date"]:
         old = date.fromisoformat(o["delivery_date"])
         new = date.fromisoformat(result["new_delivery_date"])
         days = (new - old).days
@@ -269,27 +279,23 @@ def suggest(o, result):
                         f"系统没有库存数据，请确认现有 {o['product']} 能撑到那天，否则可能缺货。")
         elif days < 0:
             tips.append(f"新交货日期比原定早 {-days} 天（{o['delivery_date']} → {new.isoformat()}）。")
-        else:
+        elif intent == "delay":
             tips.append("新交货日期和原定一样。")
         if new < db.today():
             tips.append("⚠ 这个日期已经过去了，可能解析错了，请核对原文。")
-        change = f"交货日期 {o['delivery_date']} → {new.isoformat()}"
-    elif intent == "partial" and result["quantity"] is not None:
-        short = o["quantity"] - result["quantity"]
-        if short > 0:
-            tips.append(f"供应商这次只能送 {result['quantity']} {o['unit']}，比订单少 {short} {o['unit']}。"
-                        f"剩下的需要另外下单或跟进。")
-        else:
-            tips.append(f"供应商说送 {result['quantity']} {o['unit']}，不少于订单数量 {o['quantity']}。")
-        change = f"订购数量 {o['quantity']} → {result['quantity']} {o['unit']}"
-    elif intent == "price_change" and result["unit_price"] is not None:
+        if days != 0:
+            changes.append(f"交货日期 {o['delivery_date']} → {new.isoformat()}")
+
+    if changes:
+        return tips, "，".join(changes)
+    if intent == "price_change" and result["unit_price"] is not None:
         tips.append(f"供应商说单价改为 RM {result['unit_price']:g}。系统目前不保存单价，"
                     f"确认后只记录在日志里，请自行核对成本。")
-        change = f"记录新单价 RM {result['unit_price']:g}（不修改订单字段）"
-    elif intent == "confirm":
+        return tips, f"记录新单价 RM {result['unit_price']:g}（不修改订单字段）"
+    if intent == "confirm":
         tips.append(f"供应商确认会按原定 {o['delivery_date']} 送货。")
-        change = "记录供应商已确认（不修改订单字段）"
-    return tips, change
+        return tips, "记录供应商已确认（不修改订单字段）"
+    return tips, None
 
 
 @app.route("/orders/<int:order_id>/reply", methods=["POST"])
@@ -303,7 +309,9 @@ def analyze_reply(order_id):
         parsed.update(tips=tips, change=change, can_apply=bool(change) and not parsed["needs_review"])
         r = parsed["result"]
         orbyte.write_audit(conn, "reply_analyzed",
-                           f"#{order_id} {parsed['mode_note']} 解析供应商回复「{reply_text[:200]}」→ "
+                           f"#{order_id} {parsed['mode_note']}"
+                           f"{'（' + parsed['mode_reason'] + '）' if parsed['mode_reason'] else ''} "
+                           f"解析供应商回复「{reply_text[:200]}」→ "
                            f"intent={r['intent']}, confidence={r['confidence']:.2f}"
                            f"{'，需要人工确认' if parsed['needs_review'] else ''}", order_id)
         return render_detail(conn, o, analysis=parsed, reply_text=reply_text)
@@ -331,13 +339,13 @@ def apply_reply(order_id):
             flash("这条解析结果需要人工确认，订单没有修改。", "error")
             return redirect(url_for("order_detail", order_id=order_id))
 
-        if result["intent"] == "delay":
+        if result["intent"] == "partial":
+            conn.execute("UPDATE orders SET quantity = ? WHERE id = ?", (result["quantity"], order_id))
+        if result["intent"] in ("delay", "partial") and result["new_delivery_date"]:
             # 改了交货日期：如果之前已经逾期、而新日期还没到，就回到"待送达"
             new_status = db.PENDING if result["new_delivery_date"] >= db.today().isoformat() else o["status"]
             conn.execute("UPDATE orders SET delivery_date = ?, status = ? WHERE id = ?",
                          (result["new_delivery_date"], new_status, order_id))
-        elif result["intent"] == "partial":
-            conn.execute("UPDATE orders SET quantity = ? WHERE id = ?", (result["quantity"], order_id))
         # price_change / confirm：不改订单字段，只写日志
 
         user = orbyte.get_current_user()

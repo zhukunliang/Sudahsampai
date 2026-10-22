@@ -154,10 +154,10 @@ From the project root:
 python -m unittest discover tests
 ```
 
-There are 26 tests in two files. They never call a real AI service and need no API key.
+There are 36 tests in two files. They never call a real AI service and need no API key.
 
 - `tests/test_app.py` uses a temporary database and simulated-date file (via the `SDC_DB_PATH` and `SDC_SIM_PATH` environment variables) and deletes them afterwards, so `data/sdc.db` is never touched. It covers: rejecting a zero quantity, matching and mismatched deliveries, staff being blocked from owner-only actions, and auto-chase on overdue orders without duplicates on the same day.
-- `tests/test_ai_parser.py` covers the rule mode on every sample reply (including converting "Jumaat" to the next Friday), server-side validation of bad AI results, and falling back to rule mode when the AI times out or fails.
+- `tests/test_ai_parser.py` covers the rule mode on every sample reply and on mixed messages such as *"Jumaat baru boleh hantar, 12 kotak je dulu"* (delay + partial: 12 boxes, next Friday), the rule that "confirm" is only chosen when no delay, partial or price signal is present, server-side validation of bad AI results, and falling back to rule mode when the AI times out or fails.
 
 ## How We Use Replit
 

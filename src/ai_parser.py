@@ -75,38 +75,47 @@ _schema_supported = {"value": None}
 
 def parse_reply(text, order, today):
     """解析一条供应商回复。order 是订单（dict 或 sqlite Row），today 是模拟日期（date）。
-    返回 {"result": {...}, "mode": "ai"|"rules", "mode_note": str, "needs_review": bool, "problems": [...]}"""
+    返回 {"result": {...}, "mode": "ai"|"rules", "mode_note": 页面上显示的标签,
+          "mode_reason": 为什么用了规则模式（写进日志，不含环境变量名）, "needs_review": bool, "problems": [...]}"""
     text = (text or "").strip()
     if not text:
-        return _package(_unclear("The reply is empty."), "rules", "没有内容", ["回复是空的"])
+        return _package(_unclear("The reply is empty."), "rules", "empty reply", ["回复是空的"])
     if len(text) > MAX_REPLY_LENGTH:
-        return _package(_unclear("The reply is too long to analyse."), "rules", "内容太长",
+        return _package(_unclear("The reply is too long to analyse."), "rules", "reply too long",
                         [f"回复超过 {MAX_REPLY_LENGTH} 个字"])
 
-    missing = [name for name in AI_ENV_VARS if not os.environ.get(name)]
-    if missing:
-        result = rule_parse(text, order, today)
-        mode, note = "rules", f"规则模式（未设置 {', '.join(missing)}）"
+    if not all(os.environ.get(name) for name in AI_ENV_VARS):
+        result, mode, reason = rule_parse(text, order, today), "rules", "AI not configured"
     else:
         try:
-            result = _call_model(text, order, today)
-            mode, note = "ai", f"AI 模式（{os.environ['AI_MODEL']}）"
+            result, mode, reason = _call_model(text, order, today), "ai", ""
         except Exception as e:  # 超时、网络、密钥、格式不对……任何问题都换成规则模式，Demo 不中断
-            result = rule_parse(text, order, today)
-            reason = "超时" if "Timeout" in type(e).__name__ else type(e).__name__
-            mode, note = "rules", f"规则模式（AI 调用失败：{reason}）"
+            result, mode = rule_parse(text, order, today), "rules"
+            reason = "AI timed out" if "Timeout" in type(e).__name__ else f"AI error ({type(e).__name__})"
 
     clean, problems = validate(result)
-    return _package(clean, mode, note, problems)
+    return _package(clean, mode, reason, problems)
 
 
-def _package(result, mode, note, problems):
+def provider_name():
+    """页面上显示的 AI 服务名字，从地址里认出来（不显示环境变量名，也不显示地址本身）。"""
+    url = os.environ.get("AI_BASE_URL", "").lower()
+    if "deepseek" in url:
+        return "DeepSeek"
+    if "runpod" in url:
+        return "RunPod"
+    return "online model"
+
+
+def _package(result, mode, reason, problems):
     needs_review = bool(problems) or result["confidence"] < CONFIDENCE_THRESHOLD or result["intent"] == "unclear"
     if result["confidence"] < CONFIDENCE_THRESHOLD and not problems:
         problems = [f"把握度 {result['confidence']:.2f} 低于 {CONFIDENCE_THRESHOLD}"]
     if result["intent"] == "unclear" and "看不懂供应商的意思" not in problems:
         problems = problems + ["看不懂供应商的意思"]
-    return {"result": result, "mode": mode, "mode_note": note, "needs_review": needs_review, "problems": problems}
+    note = f"AI: {provider_name()}" if mode == "ai" else "Offline rules (AI unavailable)"
+    return {"result": result, "mode": mode, "mode_note": note, "mode_reason": reason,
+            "needs_review": needs_review, "problems": problems}
 
 
 # ---------- AI 模式 ----------
@@ -228,41 +237,76 @@ WEEKDAYS = {  # Python 的 weekday()：星期一 = 0 … 星期日 = 6
     6: ("ahad", "sunday", "星期日", "星期天", "周日", "礼拜天"),
 }
 
-KEYWORDS = {  # 按优先级排列：一句话同时提到多件事时，先认"涨价"，再认"少货"、"延期"、"确认"
-    "price_change": ("harga", "price", "naik", "涨价", "价格", "加价"),
-    "partial": ("only", "short", "tak cukup", "tidak cukup", "kurang", "separuh", "sebahagian",
-                "只有", "只能", "不够", "少了", "partial"),
-    "delay": ("lambat", "lewat", "delay", "late", "tunda", "tangguh", "postpone", "延迟", "迟", "晚",
-              "tak dapat hantar", "tidak dapat hantar", "baru sampai", "送不了", "next week", "minggu depan"),
-    "confirm": ("on time", "confirm", "no problem", "boleh hantar", "akan sampai", "没问题", "确认", "准时", "ok boss"),
+KEYWORDS = {
+    # 延期：要晚一点 / 某天才能送
+    "delay": ("lambat", "lewat", "delay", "late", "tunda", "tangguh", "postpone", "baru boleh hantar",
+              "baru sampai", "tak dapat hantar", "tidak dapat hantar", "next week", "minggu depan",
+              "迟", "晚点", "改天", "延迟", "送不了"),
+    # 少货：只能先送一部分
+    "partial": ("je", "sahaja", "saja", "only", "kurang", "tak cukup", "tidak cukup", "separuh", "sebahagian",
+                "只有", "先送", "不够"),
+    # 涨价（"RM 数字" 在 find_price 里另外认）
+    "price_change": ("naik harga", "harga naik", "harga baru", "new price", "price increase",
+                     "涨价", "加价", "价格"),
+    # 确认：只有在上面三种信号都没有时才算
+    "confirm": ("ok", "okay", "confirm", "on time", "no problem", "boleh hantar macam biasa",
+                "准时", "没问题", "确认"),
 }
 
 
-def rule_parse(text, order, today):
-    """备选：不用 AI，按关键词判断意图，用正则找日期、数量、价格。把握度固定给得比较保守。"""
-    lowered = text.lower()
-    intent = next((name for name, words in KEYWORDS.items() if any(w in lowered for w in words)), "unclear")
+def has_keyword(lowered, words):
+    """文本里有没有出现这些词。英文 / 马来文按整个单词匹配（"je" 不会误中 "jemput"），中文按字面匹配。"""
+    for word in words:
+        if word.isascii():
+            if re.search(rf"(?<![a-z]){re.escape(word)}(?![a-z])", lowered):
+                return True
+        elif word in lowered:
+            return True
+    return False
 
+
+def rule_parse(text, order, today):
+    """备选：不用 AI。先把所有信号都找出来（延期 / 少货 / 涨价 / 确认，以及日期、数量、价格），再决定意图：
+    - 有涨价信号 → price_change；有少货信号 → partial；有延期信号 → delay
+      （同一句话里又延期又少货时算 partial，日期和数量一起带上）；
+    - 只有出现"确认"类词语、并且没有任何上面的信号时，才算 confirm；
+    - 其他情况一律 unclear，把握度 < 0.6，必须转人工。"""
+    lowered = text.lower()
     new_date = find_date(lowered, today)
     price = find_price(lowered)
     quantity = find_quantity(lowered, order)
 
-    result = {"intent": intent, "new_delivery_date": None, "quantity": None, "unit_price": None,
-              "confidence": 0.3, "summary_en": ""}
-    if intent == "delay":
-        result.update(new_delivery_date=new_date, confidence=0.7 if new_date else 0.5,
+    later_date = new_date is not None and new_date > order["delivery_date"]
+    signals = {
+        "price_change": has_keyword(lowered, KEYWORDS["price_change"]) or price is not None
+                        or (has_keyword(lowered, ("harga", "price")) and has_keyword(lowered, ("naik", "up"))),
+        "partial": has_keyword(lowered, KEYWORDS["partial"])
+                   or (quantity is not None and quantity < order["quantity"]),
+        "delay": has_keyword(lowered, KEYWORDS["delay"]) or later_date,  # 说的日期比原定晚，也算延期
+    }
+
+    result = {"intent": "unclear", "new_delivery_date": None, "quantity": None, "unit_price": None,
+              "confidence": 0.3, "summary_en": "The reply could not be understood by the offline rules."}
+    mixed = sum(signals.values()) > 1  # 同时有好几种信号：把握度稍微降低
+
+    if signals["price_change"]:
+        result.update(intent="price_change", unit_price=price,
+                      confidence=(0.65 if mixed else 0.7) if price is not None else 0.5,
+                      summary_en=f"Supplier says the unit price changes"
+                                 f"{' to RM ' + format(price, 'g') if price is not None else ''}.")
+    elif signals["partial"]:
+        when = f" by {new_date}" if new_date else ""
+        result.update(intent="partial", quantity=quantity, new_delivery_date=new_date,
+                      confidence=(0.65 if mixed else 0.7) if quantity is not None else 0.5,
+                      summary_en=f"Supplier can only deliver "
+                                 f"{str(quantity) + ' ' + (order['unit'] or 'units') if quantity is not None else 'part of the order'}"
+                                 f"{when} for now.")
+    elif signals["delay"]:
+        result.update(intent="delay", new_delivery_date=new_date, confidence=0.7 if new_date else 0.5,
                       summary_en=f"Supplier says the delivery is delayed{' to ' + new_date if new_date else ''}.")
-    elif intent == "partial":
-        result.update(quantity=quantity, new_delivery_date=None, confidence=0.7 if quantity is not None else 0.5,
-                      summary_en=f"Supplier can only deliver {quantity if quantity is not None else 'part of the'} "
-                                 f"{order['unit'] or 'units'} for now.")
-    elif intent == "price_change":
-        result.update(unit_price=price, confidence=0.7 if price is not None else 0.5,
-                      summary_en=f"Supplier says the unit price changes{' to RM ' + format(price, 'g') if price is not None else ''}.")
-    elif intent == "confirm":
-        result.update(confidence=0.7, summary_en="Supplier confirms the delivery as planned.")
-    else:
-        result["summary_en"] = "The reply could not be understood by the keyword rules."
+    elif has_keyword(lowered, KEYWORDS["confirm"]):
+        result.update(intent="confirm", new_delivery_date=new_date, confidence=0.7,
+                      summary_en="Supplier confirms the delivery as planned.")
     return result
 
 
@@ -301,8 +345,9 @@ def find_quantity(lowered, order):
     """找数量：优先找"数字 + 单位"（订单单位或常见单位）。去掉价格和日期后再找。找不到返回 None。"""
     cleaned = re.sub(r"rm\s*\d+(?:\.\d+)?", " ", lowered)
     cleaned = re.sub(r"\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}", " ", cleaned)
-    units = {u for u in (str(order["unit"] or "").lower(), "kotak", "box", "boxes", "pcs", "unit", "箱", "包",
-                         "桶", "条", "盘", "瓶", "kg", "tin", "bag", "beg")} - {""}
+    units = {u for u in (str(order["unit"] or "").lower(), "kotak", "box", "boxes", "carton", "ctn",
+                         "botol", "bottle", "bottles", "pcs", "unit", "units", "tin", "bag", "beg", "kg",
+                         "箱", "瓶", "包", "桶", "条", "盘")} - {""}
     unit_pattern = "|".join(re.escape(u) for u in sorted(units, key=len, reverse=True))
     m = re.search(rf"(\d+)\s*(?:{unit_pattern})", cleaned)
     if m:
