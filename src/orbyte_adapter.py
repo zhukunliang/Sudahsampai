@@ -77,7 +77,7 @@ def create_approval(conn, order_id, title, detail):
     owner = find_owner()
     approval_id = f"approval-{order_id}-{db.today().isoformat()}"
     write_audit(conn, "approval_created",
-                f"#{order_id} 已发送到店主 {owner['name']} 的 Orbyte 待办：{title}。{detail}", order_id)
+                f"#{order_id} Sent to {owner['name']}'s Orbyte to-do: {title}. {detail}", order_id)
     return {"id": approval_id, "assignee": owner["name"], "title": title}
 
 
@@ -88,7 +88,7 @@ def charge_credit(conn, reason, order_id=None):
     模拟：每扣一次写一条 credit_charged 日志，"本月已用"就是本模拟月里这种日志的条数。
     不涉及任何真实付款。
     将来替换为真实 Orbyte API 调用：从这家店的 Orbyte 点数钱包里扣点，余额由 Orbyte 管理。"""
-    write_audit(conn, "credit_charged", f"扣 {CREDIT_PER_ACTION} Orbyte credit：{reason}", order_id)
+    write_audit(conn, "credit_charged", f"Charged {CREDIT_PER_ACTION} Orbyte credit: {reason}", order_id)
     return credits_used_this_month(conn)
 
 
@@ -104,10 +104,11 @@ def credits_used_this_month(conn):
 
 # ---------- 6. 审计日志 ----------
 
-def write_audit(conn, action, detail, order_id=None, actor=None):
+def write_audit(conn, action, detail, order_id=None, actor=None, amount=None):
     """写一条审计日志，返回日志 id。actor 不填时用当前登录用户的角色；系统自动做的事填 SYSTEM。
+    amount 是这件事避免的损失（RM），没有就不填。
     模拟：写进本地 SQLite 的 logs 表。
     将来替换为真实 Orbyte API 调用：写入 Orbyte 统一的审计日志，和其他 Orbyte 模块的记录放在一起。"""
     if actor is None:
         actor = get_current_user()["role"]
-    return db.add_log(conn, actor, action, detail, order_id)
+    return db.add_log(conn, actor, action, detail, order_id, amount)

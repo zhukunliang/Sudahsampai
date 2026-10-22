@@ -1,0 +1,21 @@
+{# 共用的小部件：状态标签、订单号按钮、确认收货表单 #}
+
+{% macro status_pill(o) -%}
+<span class="pill pill-{{ o.flag }}">{{ t('status.' ~ o.status) }}</span>
+{%- endmacro %}
+
+{% macro order_chip(o) -%}
+<a class="order-chip" href="{{ url_for('order_detail', order_id=o.id) }}">#{{ o.id }}</a>
+{%- endmacro %}
+
+{% macro due_text(o) -%}
+{% if o.due %}{{ t(o.due[0], **o.due[1]) }}{% else %}—{% endif %}
+{%- endmacro %}
+
+{% macro receive_form(o) -%}
+<form method="post" action="{{ url_for('receive', order_id=o.id) }}" class="stack">
+  <label for="received_quantity">{{ t('next.received_qty', q=o.quantity, unit=o.unit) }}</label>
+  <input type="number" id="received_quantity" name="received_quantity" value="{{ o.quantity }}" inputmode="numeric">
+  <button type="submit" class="btn btn-primary btn-block"><i data-lucide="package-check"></i> {{ t('btn.confirm_receipt') }}</button>
+</form>
+{%- endmacro %}

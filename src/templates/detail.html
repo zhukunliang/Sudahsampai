@@ -1,136 +1,189 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m with context %}
 {% block content %}
 
+<a class="back-link" href="{{ url_for('index') }}"><i data-lucide="arrow-left"></i> {{ t('detail.back') }}</a>
+<div class="page-head">
+  <div>
+    <h1>{{ t('detail.order', id=o.id) }} {{ m.status_pill(o) }}</h1>
+    <p class="muted">{{ o.product }} · {{ o.supplier }}</p>
+  </div>
+</div>
+
 {# 数量有差异、还没处理完时，在页面最上面放一个醒目的提示框 #}
-{% if o.status in db.ISSUES %}
+{% if o.status in db.ISSUES and o.diff %}
 <div class="alert">
-  ⚠ {{ o.diff_text }}
-  <div class="alert-sub">当前状态：{{ o.status_label }} · 已发送到店主的 Orbyte 待办</div>
+  <i data-lucide="triangle-alert"></i>
+  <div>
+    <b>{{ diff_label(o.diff) }}</b>
+    <span class="muted">({{ t('diff.detail', q=o.diff.ordered, r=o.diff.received) }})</span>
+    <div class="small">{{ t('status.' ~ o.status) }} · {{ t('next.resolve_sent') }}</div>
+  </div>
 </div>
 {% endif %}
 
-<h1>订单 #{{ o.id }}</h1>
-
-<div class="card">
-  <dl>
-    <dt>供应商</dt><dd>{{ o.supplier or "—" }}</dd>
-    <dt>WhatsApp</dt><dd>{{ o.whatsapp or "—" }}</dd>
-    <dt>商品</dt><dd>{{ o.product }}</dd>
-    <dt>类别</dt><dd>{{ o.category or "—" }}</dd>
-    <dt>订购数量</dt><dd>{{ o.quantity }} {{ o.unit }}</dd>
-    <dt>交货日期</dt><dd>{{ o.delivery_date }}{% if o.status in db.AWAITING %}（{{ o.days_text }}）{% endif %}</dd>
-    <dt>保质期</dt><dd>{{ o.expiry_date or "未填写" }}</dd>
-    <dt>提醒规则</dt>
-    <dd>提前 {{ o.remind_days_before }} 天提醒，自动催货：{{ "开" if o.auto_chase else "关" }}</dd>
-    <dt>状态</dt><dd><span class="tag {{ o.flag }}">{{ o.status_label }}</span></dd>
-    {% if o.received_at %}
-    <dt>实收数量</dt><dd>{{ o.received_quantity }} {{ o.unit }}{% if o.diff_text %}（{{ o.diff_text }}）{% endif %}</dd>
-    <dt>到货日期</dt><dd>{{ o.received_at }}</dd>
-    <dt>是否准时</dt><dd>{{ "准时" if o.on_time else "迟到 %d 天" % o.late_days }}</dd>
-    {% endif %}
-  </dl>
-  <p class="muted">为什么是这个颜色：{{ o.flag_reason }}</p>
-</div>
-
-{% if o.status in db.ISSUES %}
-<h2>处理数量差异</h2>
-<form method="post" action="{{ url_for('resolve', order_id=o.id) }}" class="card">
-  {% if not is_owner %}<p class="muted">仅店主可处理</p>{% endif %}
-  <button type="submit" name="choice" value="accept" {% if not is_owner %}disabled{% endif %}>接受实收数量</button>
-  <button type="submit" name="choice" value="restock" {% if not is_owner %}disabled{% endif %}>要求供应商补货</button>
-  <button type="submit" name="choice" value="negotiate" {% if not is_owner %}disabled{% endif %}>标记为待协商</button>
-</form>
-{% endif %}
-
-<h2 id="reply">供应商回复</h2>
-<form method="post" action="{{ url_for('analyze_reply', order_id=o.id) }}#reply" class="card">
-  {% if samples %}
-  <label for="sample">插入样例（演示用，来自 data/sample_replies.json）</label>
-  <select id="sample" onchange="if (this.value) document.getElementById('reply_text').value = this.value">
-    <option value="">— 选择一条样例 —</option>
-    {% for s in samples %}<option value="{{ s.text }}">{{ s.label }}</option>{% endfor %}
-  </select>
-  {% endif %}
-  <label for="reply_text">粘贴供应商的 WhatsApp 回复（马来文 / 中文 / 英文都可以）</label>
-  <textarea id="reply_text" name="reply_text" rows="3" maxlength="1000">{{ reply_text }}</textarea>
-  <button type="submit">AI 分析</button>
-</form>
-
-{% if analysis %}
-{% set r = analysis.result %}
-<div class="card analysis">
-  <p>
-    <span class="mode {{ 'mode-ai' if analysis.mode == 'ai' else 'mode-rules' }}">{{ analysis.mode_note }}</span>
-    {% if analysis.needs_review %}<span class="mode mode-review">需要人工确认</span>{% endif %}
-  </p>
-  {% if analysis.problems %}
-  <ul class="problems">{% for p in analysis.problems %}<li>{{ p }}</li>{% endfor %}</ul>
-  {% endif %}
-
-  {# 原文和解析结果对照 #}
-  <div class="compare">
-    <div>
-      <h3>原文</h3>
-      <div class="message">{{ reply_text }}</div>
-    </div>
-    <div>
-      <h3>解析结果</h3>
-      <dl>
-        <dt>意图</dt><dd>{{ r.intent }}</dd>
-        <dt>新交货日期</dt><dd>{{ r.new_delivery_date or "—" }}</dd>
-        <dt>数量</dt><dd>{{ r.quantity if r.quantity is not none else "—" }}</dd>
-        <dt>单价</dt><dd>{{ "RM %g" % r.unit_price if r.unit_price is not none else "—" }}</dd>
-        <dt>把握度</dt><dd>{{ "%.2f" % r.confidence }}</dd>
-        <dt>英文摘要</dt><dd>{{ r.summary_en or "—" }}</dd>
+<div class="detail-grid">
+  {# ---------- 左栏：订单信息 + 时间线 + 提醒规则 ---------- #}
+  <div class="detail-main">
+    <section class="card">
+      <dl class="info">
+        <dt>{{ t('field.supplier') }}</dt><dd>{{ o.supplier or "—" }}</dd>
+        <dt>{{ t('field.whatsapp') }}</dt><dd>{{ o.whatsapp or "—" }}</dd>
+        <dt>{{ t('field.item') }}</dt><dd>{{ o.product }}</dd>
+        <dt>{{ t('field.category') }}</dt><dd>{{ o.category or "—" }}</dd>
+        <dt>{{ t('field.qty') }}</dt><dd>{{ o.quantity }} {{ o.unit }}</dd>
+        <dt>{{ t('field.unit_price') }}</dt><dd>{{ rm(o.unit_price) if o.unit_price is not none else t('value.none') }}</dd>
+        <dt>{{ t('field.order_value') }}</dt><dd>{{ rm(o.value) if o.value is not none else "—" }}</dd>
+        <dt>{{ t('field.delivery') }}</dt><dd>{{ o.delivery_date }}{% if o.due %} · {{ m.due_text(o) }}{% endif %}</dd>
+        <dt>{{ t('field.expiry') }}</dt><dd>{{ o.expiry_date or t('value.none') }}</dd>
+        <dt>{{ t('field.rules') }}</dt>
+        <dd>{{ t('rules.summary', n=o.remind_days_before, state=t('state.on') if o.auto_chase else t('state.off')) }}</dd>
+        {% if o.received_at %}
+        <dt>{{ t('field.received_qty') }}</dt><dd>{{ o.received_quantity }} {{ o.unit }}{% if o.diff %} · {{ diff_label(o.diff) }}{% endif %}</dd>
+        <dt>{{ t('field.received_at') }}</dt><dd>{{ o.received_at }}</dd>
+        <dt>{{ t('field.on_time') }}</dt><dd>{{ t('ontime.yes') if o.on_time else t('ontime.late', n=o.late_days) }}</dd>
+        {% endif %}
       </dl>
-    </div>
+      <p class="why"><i data-lucide="info"></i> <span><b>{{ t('why.title') }}:</b> {{ t(o.reason[0], **o.reason[1]) }}</span></p>
+    </section>
+
+    <section class="card">
+      <h2><i data-lucide="git-commit-horizontal"></i> {{ t('timeline.title') }}</h2>
+      <ol class="timeline">
+        {% for key, done, when in timeline %}
+        <li class="{{ 'done' if done else 'todo' }}">
+          <span class="dot"><i data-lucide="{{ 'check' if done else 'circle' }}"></i></span>
+          <span class="tl-label">{{ t(key) }}</span>
+          <span class="tl-date">{{ when or '' }}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+
+    {# 提醒规则：折叠起来；店员看得到但不能改 #}
+    <details class="card collapsible">
+      <summary><i data-lucide="bell"></i> {{ t('rules.title') }}</summary>
+      <form method="post" action="{{ url_for('update_rules', order_id=o.id) }}" class="stack">
+        {% if not is_owner %}<p class="muted small"><i data-lucide="lock"></i> {{ t('rules.owner_only') }}</p>{% endif %}
+        <label for="remind_days_before">{{ t('rules.remind') }}</label>
+        <input type="number" id="remind_days_before" name="remind_days_before" value="{{ o.remind_days_before }}"
+               {% if not is_owner %}disabled{% endif %}>
+        <label class="check">
+          <input type="checkbox" name="auto_chase" value="1" {% if o.auto_chase %}checked{% endif %}
+                 {% if not is_owner %}disabled{% endif %}>
+          {{ t('rules.auto') }}
+        </label>
+        <button type="submit" class="btn btn-secondary" {% if not is_owner %}disabled{% endif %}>{{ t('rules.save') }}</button>
+      </form>
+    </details>
   </div>
 
-  {% if analysis.tips %}
-  <h3>系统建议</h3>
-  <ul>{% for t in analysis.tips %}<li>{{ t }}</li>{% endfor %}</ul>
-  {% endif %}
+  {# ---------- 右栏：下一步该做什么（只显示当前需要的操作） ---------- #}
+  <aside class="detail-side" id="next">
+    <h2 class="side-title">{{ t('next.title') }}</h2>
 
-  {% if analysis.can_apply %}
-  {# 把页面上显示的结果原样交回后端；后端会再校验一次，并且只有店主能提交 #}
-  <form method="post" action="{{ url_for('apply_reply', order_id=o.id) }}">
-    {% for key in ["intent", "new_delivery_date", "quantity", "unit_price", "confidence", "summary_en"] %}
-    <input type="hidden" name="{{ key }}" value="{{ r[key] if r[key] is not none else '' }}">
-    {% endfor %}
-    <input type="hidden" name="reply_text" value="{{ reply_text }}">
-    <p>确认后将：<b>{{ analysis.change }}</b></p>
-    {% if not is_owner %}<p class="muted">仅店主可确认更新订单</p>{% endif %}
-    <button type="submit" {% if not is_owner %}disabled{% endif %}>确认更新订单</button>
-  </form>
-  {% elif analysis.needs_review %}
-  <p class="muted">系统不会根据这条回复修改任何东西。请直接联系供应商核实。</p>
-  {% endif %}
+    {% if analysis %}
+    {% set r = analysis.result %}
+    <section class="card action-card analysis">
+      <h3><i data-lucide="sparkles"></i> {{ t('analysis.title') }}</h3>
+      <p>
+        <span class="mode {{ 'mode-ai' if analysis.mode == 'ai' else 'mode-rules' }}">{{ analysis.mode_note }}</span>
+        {% if analysis.needs_review %}<span class="mode mode-review">{{ t('analysis.needs_review') }}</span>{% endif %}
+      </p>
+      {% if analysis.review_reason %}<p class="small text-red">{{ t(analysis.review_reason[0], **analysis.review_reason[1]) }}</p>{% endif %}
+      <h4>{{ t('analysis.original') }}</h4>
+      <div class="message">{{ reply_text }}</div>
+      <h4>{{ t('analysis.result') }}</h4>
+      <dl class="info compact">
+        <dt>{{ t('res.intent') }}</dt><dd>{{ t('intent.' ~ r.intent) }}</dd>
+        <dt>{{ t('res.new_date') }}</dt><dd>{{ r.new_delivery_date or "—" }}</dd>
+        <dt>{{ t('res.qty') }}</dt><dd>{{ r.quantity if r.quantity is not none else "—" }}</dd>
+        <dt>{{ t('res.price') }}</dt><dd>{{ rm(r.unit_price) if r.unit_price is not none else "—" }}</dd>
+        <dt>{{ t('res.confidence') }}</dt><dd>{{ "%.2f" % r.confidence }}</dd>
+        <dt>{{ t('res.summary') }}</dt><dd>{{ r.summary_en or "—" }}</dd>
+      </dl>
+      {% if analysis.tips %}
+      <h4>{{ t('analysis.suggestion') }}</h4>
+      <ul class="tips">{% for key, params in analysis.tips %}<li>{{ t(key, **params) }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if analysis.can_apply %}
+      {# 把页面上显示的结果原样交回后端；后端会再校验一次，并且只有店主能提交 #}
+      <form method="post" action="{{ url_for('apply_reply', order_id=o.id) }}" class="stack">
+        {% for key in ["intent", "new_delivery_date", "quantity", "unit_price", "confidence", "summary_en"] %}
+        <input type="hidden" name="{{ key }}" value="{{ r[key] if r[key] is not none else '' }}">
+        {% endfor %}
+        <input type="hidden" name="reply_text" value="{{ reply_text }}">
+        <p class="small">{{ t('analysis.will_change', change=analysis.change) }}</p>
+        {% if not is_owner %}<p class="muted small"><i data-lucide="lock"></i> {{ t('analysis.owner_only') }}</p>{% endif %}
+        <button type="submit" class="btn btn-primary btn-block" {% if not is_owner %}disabled{% endif %}>
+          <i data-lucide="check"></i> {{ t('analysis.confirm') }}
+        </button>
+      </form>
+      {% elif analysis.needs_review %}
+      <p class="muted small">{{ t('analysis.no_change') }}</p>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if o.status in db.ISSUES %}
+      {# 有差异：只有店主能处理的三个按钮 #}
+      <section class="card action-card action-urgent">
+        <h3><i data-lucide="scale"></i> {{ t('next.resolve_title') }}</h3>
+        {% if o.diff %}<p class="big">{{ diff_label(o.diff) }}</p>{% endif %}
+        <form method="post" action="{{ url_for('resolve', order_id=o.id) }}" class="stack">
+          {% if not is_owner %}<p class="muted small"><i data-lucide="lock"></i> {{ t('owner_only') }}</p>{% endif %}
+          <button type="submit" name="choice" value="accept" class="btn btn-primary btn-block" {% if not is_owner %}disabled{% endif %}>{{ t('resolve.accept') }}</button>
+          <button type="submit" name="choice" value="restock" class="btn btn-secondary btn-block" {% if not is_owner %}disabled{% endif %}>{{ t('resolve.restock') }}</button>
+          <button type="submit" name="choice" value="negotiate" class="btn btn-secondary btn-block" {% if not is_owner %}disabled{% endif %}>{{ t('resolve.negotiate') }}</button>
+        </form>
+      </section>
+
+    {% elif o.status in db.AWAITING %}
+      {% set reply_card %}
+      <section class="card action-card">
+        <h3><i data-lucide="message-square-text"></i> {{ t('next.reply_title') }}</h3>
+        <p class="muted small">{{ t('next.reply_hint') }}</p>
+        <form method="post" action="{{ url_for('analyze_reply', order_id=o.id) }}#next" class="stack">
+          {% if samples %}
+          <label for="sample">{{ t('next.sample') }}</label>
+          <select id="sample" onchange="if (this.value) document.getElementById('reply_text').value = this.value">
+            <option value="">{{ t('next.sample_placeholder') }}</option>
+            {% for s in samples %}<option value="{{ s.text }}">{{ t('intent.' ~ s.expected_intent) }}</option>{% endfor %}
+          </select>
+          {% endif %}
+          <textarea id="reply_text" name="reply_text" rows="3" maxlength="1000">{{ reply_text }}</textarea>
+          <button type="submit" class="btn btn-primary btn-block"><i data-lucide="sparkles"></i> {{ t('next.analyze') }}</button>
+        </form>
+      </section>
+      {% endset %}
+
+      {% if o.days_left <= 0 %}
+        {# 今天到期或已经逾期：先确认收货，再是供应商回复 #}
+        <section class="card action-card">
+          <h3><i data-lucide="package-check"></i> {{ t('next.receive_title') }}</h3>
+          {{ m.receive_form(o) }}
+        </section>
+        {{ reply_card }}
+      {% else %}
+        {# 还没到交货日期：主要是等供应商消息；货提前到了也可以展开确认收货 #}
+        {{ reply_card }}
+        <details class="card collapsible">
+          <summary><i data-lucide="package-check"></i> {{ t('next.early_receive') }}</summary>
+          {{ m.receive_form(o) }}
+        </details>
+      {% endif %}
+
+    {% else %}
+      <section class="card action-card action-done">
+        <h3><i data-lucide="circle-check-big"></i> {{ t('next.done_title') }}</h3>
+        <p class="muted">{{ t('next.done_text') }}</p>
+      </section>
+    {% endif %}
+  </aside>
 </div>
-{% endif %}
 
-{% if o.status in db.AWAITING %}
-<h2>确认收货</h2>
-<form method="post" action="{{ url_for('receive', order_id=o.id) }}" class="card">
-  <label for="received_quantity">实收数量（订单 {{ o.quantity }} {{ o.unit }}）</label>
-  <input type="number" id="received_quantity" name="received_quantity" value="{{ o.quantity }}">
-  <button type="submit">确认收货</button>
-</form>
-{% endif %}
-
-<h2>提醒规则</h2>
-<form method="post" action="{{ url_for('update_rules', order_id=o.id) }}" class="card">
-  {% if not is_owner %}<p class="muted">仅店主可修改</p>{% endif %}
-  <label for="remind_days_before">提前几天提醒</label>
-  <input type="number" id="remind_days_before" name="remind_days_before" value="{{ o.remind_days_before }}"
-         {% if not is_owner %}disabled{% endif %}>
-  <label class="check">
-    <input type="checkbox" name="auto_chase" value="1" {% if o.auto_chase %}checked{% endif %}
-           {% if not is_owner %}disabled{% endif %}>
-    自动催货
-  </label>
-  <button type="submit" {% if not is_owner %}disabled{% endif %}>保存规则</button>
-</form>
-
-<h2>这张订单的日志</h2>
-{% include "_log_table.html" %}
+<section class="card">
+  <h2><i data-lucide="history"></i> {{ t('logs.order_logs') }}</h2>
+  {% include "_log_table.html" %}
+</section>
 {% endblock %}

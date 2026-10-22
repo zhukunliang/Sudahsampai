@@ -1,49 +1,86 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>新增订单</h1>
+<a class="back-link" href="{{ url_for('index') }}"><i data-lucide="arrow-left"></i> {{ t('detail.back') }}</a>
+<div class="page-head">
+  <div>
+    <h1>{{ t('new.title') }}</h1>
+    <p class="muted">{{ t('new.subtitle') }}</p>
+  </div>
+</div>
 
 {% if errors %}
-<div class="flash error">
-  <b>请先修改以下问题：</b>
-  <ul>
-    {% for e in errors %}<li>{{ e }}</li>{% endfor %}
-  </ul>
+<div class="flash flash-error">
+  <i data-lucide="circle-alert"></i>
+  <div>
+    <b>{{ t('new.errors') }}</b>
+    <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  </div>
 </div>
 {% endif %}
 
-<form method="post" class="card">
-  <label for="supplier">供应商名</label>
-  <input type="text" id="supplier" name="supplier" value="{{ form.supplier }}">
+<form method="post" class="card form-card">
+  <h3>{{ t('new.section_supplier') }}</h3>
+  <div class="form-grid">
+    <div>
+      <label for="supplier">{{ t('field.supplier') }}</label>
+      <input type="text" id="supplier" name="supplier" value="{{ form.supplier }}">
+    </div>
+    <div>
+      <label for="whatsapp">{{ t('field.whatsapp') }}</label>
+      <input type="tel" id="whatsapp" name="whatsapp" placeholder="{{ t('ph.whatsapp') }}" value="{{ form.whatsapp }}">
+    </div>
+  </div>
 
-  <label for="whatsapp">供应商 WhatsApp</label>
-  <input type="tel" id="whatsapp" name="whatsapp" placeholder="+60 12-345 6789" value="{{ form.whatsapp }}">
+  <h3>{{ t('new.section_item') }}</h3>
+  <div class="form-grid">
+    <div>
+      <label for="product">{{ t('field.item') }} *</label>
+      <input type="text" id="product" name="product" value="{{ form.product }}">
+    </div>
+    <div>
+      <label for="category">{{ t('field.category') }} <span class="muted">({{ t('new.optional') }})</span></label>
+      <input type="text" id="category" name="category" placeholder="{{ t('ph.category') }}" value="{{ form.category }}">
+    </div>
+    <div>
+      <label for="quantity">{{ t('field.qty') }} *</label>
+      <input type="number" id="quantity" name="quantity" inputmode="numeric" value="{{ form.quantity }}">
+    </div>
+    <div>
+      <label for="unit">{{ t('field.unit') }}</label>
+      <input type="text" id="unit" name="unit" placeholder="{{ t('ph.unit') }}" value="{{ form.unit }}">
+    </div>
+    <div>
+      <label for="unit_price">{{ t('field.unit_price') }} (RM) <span class="muted">({{ t('new.optional') }})</span></label>
+      <input type="text" id="unit_price" name="unit_price" inputmode="decimal" placeholder="{{ t('ph.price') }}"
+             value="{{ form.unit_price if form.unit_price is not none else '' }}">
+    </div>
+  </div>
 
-  <label for="product">商品名 *</label>
-  <input type="text" id="product" name="product" value="{{ form.product }}">
+  <h3>{{ t('new.section_delivery') }}</h3>
+  <div class="form-grid">
+    <div>
+      <label for="delivery_date">{{ t('field.delivery') }} *</label>
+      <input type="date" id="delivery_date" name="delivery_date" value="{{ form.delivery_date }}">
+    </div>
+    <div>
+      <label for="expiry_date">{{ t('field.expiry') }} <span class="muted">({{ t('new.optional') }})</span></label>
+      <input type="date" id="expiry_date" name="expiry_date" value="{{ form.expiry_date }}">
+    </div>
+    <div>
+      <label for="remind_days_before">{{ t('rules.remind') }}</label>
+      <input type="number" id="remind_days_before" name="remind_days_before" value="{{ form.remind_days_before }}">
+    </div>
+    <div class="check-cell">
+      <label class="check">
+        <input type="checkbox" name="auto_chase" value="1" {% if form.auto_chase %}checked{% endif %}>
+        {{ t('rules.auto') }}
+      </label>
+    </div>
+  </div>
 
-  <label for="category">类别</label>
-  <input type="text" id="category" name="category" placeholder="如：蔬菜、蛋奶、主食" value="{{ form.category }}">
-
-  <label for="quantity">数量 *（大于 0）</label>
-  <input type="number" id="quantity" name="quantity" value="{{ form.quantity }}">
-
-  <label for="unit">单位</label>
-  <input type="text" id="unit" name="unit" placeholder="如：箱、包、kg" value="{{ form.unit }}">
-
-  <label for="delivery_date">交货日期 *</label>
-  <input type="date" id="delivery_date" name="delivery_date" value="{{ form.delivery_date }}">
-
-  <label for="expiry_date">保质期（可选）</label>
-  <input type="date" id="expiry_date" name="expiry_date" value="{{ form.expiry_date }}">
-
-  <label for="remind_days_before">提前几天提醒</label>
-  <input type="number" id="remind_days_before" name="remind_days_before" value="{{ form.remind_days_before }}">
-
-  <label class="check">
-    <input type="checkbox" name="auto_chase" value="1" {% if form.auto_chase %}checked{% endif %}>
-    自动催货
-  </label>
-
-  <button type="submit">保存订单</button>
+  <div class="form-actions">
+    <a class="btn btn-ghost" href="{{ url_for('index') }}">{{ t('new.cancel') }}</a>
+    <button type="submit" class="btn btn-primary"><i data-lucide="check"></i> {{ t('new.save') }}</button>
+  </div>
 </form>
 {% endblock %}

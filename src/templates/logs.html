@@ -1,18 +1,23 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>活动日志</h1>
+<div class="page-head">
+  <div>
+    <h1>{{ t('logs.title') }}</h1>
+    <p class="muted">{{ t('logs.subtitle') }}</p>
+  </div>
+</div>
 
-<form method="get" action="{{ url_for('show_logs') }}" class="filter">
-  <label for="order">按订单编号筛选</label>
-  <input type="text" id="order" name="order" inputmode="numeric" placeholder="如：6"
-         value="{{ order_id if order_id is not none else '' }}">
-  <button type="submit">筛选</button>
-  {% if order_id is not none %}<a href="{{ url_for('show_logs') }}">显示全部</a>{% endif %}
-</form>
-
-<p class="muted">
-  {% if order_id is not none %}订单 #{{ order_id }} 的日志，共 {{ logs|length }} 条。{% else %}全部日志，共 {{ logs|length }} 条。{% endif %}
-  最新的在最上面。
-</p>
-
-{% include "_log_table.html" %}{% endblock %}
+<section class="card">
+  <form method="get" action="{{ url_for('show_logs') }}" class="filter">
+    <label for="order">{{ t('logs.filter') }}</label>
+    <input type="text" id="order" name="order" inputmode="numeric" placeholder="6"
+           value="{{ order_id if order_id is not none else '' }}">
+    <button type="submit" class="btn btn-secondary"><i data-lucide="filter"></i> {{ t('logs.filter_btn') }}</button>
+    {% if order_id is not none %}<a class="btn btn-ghost" href="{{ url_for('show_logs') }}">{{ t('logs.show_all') }}</a>{% endif %}
+    <span class="muted small filter-count">
+      {% if order_id is not none %}{{ t('logs.count_order', id=order_id, n=logs|length) }}{% else %}{{ t('logs.count_all', n=logs|length) }}{% endif %}
+    </span>
+  </form>
+  {% include "_log_table.html" %}
+</section>
+{% endblock %}

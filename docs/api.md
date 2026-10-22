@@ -34,8 +34,8 @@ Records a delivery for one order and checks the received quantity. Intended for 
   "received_quantity": 13,
   "received_at": "2026-10-21",
   "on_time": true,
-  "discrepancy": "少收 2 箱（订单 15，实收 13）",
-  "approval": { "id": "approval-2-2026-10-21", "assignee": "Ah Seng", "title": "处理数量差异" },
+  "discrepancy": "Short 2 boxes (ordered 15, received 13) ≈ RM 36.00",
+  "approval": { "id": "approval-2-2026-10-21", "assignee": "Ah Seng", "title": "Resolve quantity mismatch" },
   "credits_used_this_month": 1
 }
 ```

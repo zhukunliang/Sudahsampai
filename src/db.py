@@ -20,7 +20,7 @@ DEMO_START = date(2026, 10, 21)
 # 所以直接写固定的 +8 小时，不需要额外安装时区数据库（Windows 上默认没有）
 MALAYSIA_TZ = timezone(timedelta(hours=8), "MYT")
 
-# 订单状态：数据库里存英文代码，页面上显示中文
+# 订单状态：数据库里存英文代码，页面上用 locales.json 里的 status.<代码> 翻译
 PENDING = "pending"                      # 待送达
 OVERDUE = "overdue"                      # 逾期
 DELIVERED = "delivered"                  # 已送达（数量一致，或店主接受了实收数量）
@@ -28,42 +28,37 @@ DISCREPANCY = "discrepancy"              # 实收数量和订单不一致，等�
 RESTOCK_REQUESTED = "restock_requested"  # 店主已要求供应商补货
 NEGOTIATING = "negotiating"              # 店主标记为待协商
 
-STATUS_LABELS = {
-    PENDING: "待送达",
-    OVERDUE: "逾期",
-    DELIVERED: "已送达",
-    DISCREPANCY: "数量有差异",
-    RESTOCK_REQUESTED: "等待补货",
-    NEGOTIATING: "待协商",
-}
+STATUSES = (PENDING, OVERDUE, DELIVERED, DISCREPANCY, RESTOCK_REQUESTED, NEGOTIATING)
 # 还没收货、可以"确认收货"的状态
 AWAITING = (PENDING, OVERDUE)
 # 收货时数量有问题、需要店主处理的状态
 ISSUES = (DISCREPANCY, RESTOCK_REQUESTED, NEGOTIATING)
+# 等供应商行动的状态（补货、协商）
+WAITING = (RESTOCK_REQUESTED, NEGOTIATING)
 
 # 表结构每改一次就把这个数字加 1，启动时发现版本不同就重建
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
-# 日志动作 → (标签文字, 标签颜色)。同一类动作用同一种颜色；不在表里的动作显示灰色"其他"
+# 日志动作 → (标签文字的 key, 标签颜色)。同一类动作用同一种颜色；不在表里的动作显示灰色"其他"
 ACTION_TAGS = {
-    "order_created": ("新增", "blue"),
-    "reminder": ("提醒", "yellow"),
-    "overdue": ("提醒", "yellow"),
-    "auto_chase": ("催货", "red"),
-    "received": ("收货", "green"),
-    "discrepancy": ("差异", "orange"),
-    "discrepancy_accepted": ("差异", "orange"),
-    "restock_requested": ("差异", "orange"),
-    "negotiating": ("差异", "orange"),
-    "permission_denied": ("权限拒绝", "purple"),
-    "role_switched": ("角色切换", "gray-blue"),
-    "demo_reset": ("重置", "gray"),
-    "approval_created": ("Orbyte 待办", "orange"),
-    "credit_charged": ("扣点", "gray-blue"),
-    "reply_analyzed": ("AI 分析", "teal"),
-    "reply_applied": ("确认更新", "teal"),
+    "order_created": ("tag.created", "blue"),
+    "reminder": ("tag.reminder", "yellow"),
+    "overdue": ("tag.reminder", "yellow"),
+    "auto_chase": ("tag.chase", "red"),
+    "received": ("tag.received", "green"),
+    "discrepancy": ("tag.discrepancy", "orange"),
+    "discrepancy_accepted": ("tag.discrepancy", "orange"),
+    "restock_requested": ("tag.discrepancy", "orange"),
+    "negotiating": ("tag.discrepancy", "orange"),
+    "permission_denied": ("tag.denied", "purple"),
+    "role_switched": ("tag.role", "gray-blue"),
+    "demo_reset": ("tag.reset", "gray"),
+    "approval_created": ("tag.todo", "orange"),
+    "credit_charged": ("tag.credit", "gray-blue"),
+    "reply_analyzed": ("tag.ai", "teal"),
+    "reply_applied": ("tag.applied", "teal"),
 }
-OTHER_TAG = ("其他", "gray")
+OTHER_TAG = ("tag.other", "gray")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS orders (
@@ -73,7 +68,8 @@ CREATE TABLE IF NOT EXISTS orders (
     product TEXT NOT NULL,               -- 商品名
     category TEXT NOT NULL DEFAULT '',   -- 类别
     quantity INTEGER NOT NULL,           -- 数量
-    unit TEXT NOT NULL DEFAULT '',       -- 单位（包、箱、kg……）
+    unit TEXT NOT NULL DEFAULT '',       -- 单位（boxes、bags、kg……）
+    unit_price REAL,                     -- 单价（RM），可以不填
     delivery_date TEXT NOT NULL,         -- 交货日期 YYYY-MM-DD
     expiry_date TEXT,                    -- 保质期到期日 YYYY-MM-DD，可以不填
     remind_days_before INTEGER NOT NULL DEFAULT 1, -- 提前几天提醒
@@ -91,7 +87,8 @@ CREATE TABLE IF NOT EXISTS logs (
     role TEXT NOT NULL,                  -- 角色
     action TEXT NOT NULL,                -- 动作（英文代码，见 ACTION_TAGS）
     detail TEXT NOT NULL,                -- 内容
-    order_id INTEGER                     -- 跟哪张订单有关；和订单无关的日志为空
+    order_id INTEGER,                    -- 跟哪张订单有关；和订单无关的日志为空
+    amount REAL                          -- 这件事避免的损失（RM）：少收的货值、涨价的差额；没有就为空
 );
 """
 
@@ -126,16 +123,24 @@ def advance_day():
 
 # ---------- 日志 ----------
 
-def add_log(conn, role, action, detail, order_id=None):
-    """写一条日志：同时记下真实时间和当时的模拟日期。返回这条日志的 id。"""
+def add_log(conn, role, action, detail, order_id=None, amount=None):
+    """写一条日志：同时记下真实时间和当时的模拟日期。amount 是这件事避免的损失（RM）。返回日志 id。"""
     cur = conn.execute(
-        """INSERT INTO logs (timestamp, sim_date, role, action, detail, order_id)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO logs (timestamp, sim_date, role, action, detail, order_id, amount)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
         # 不管服务器在哪个时区（Replit 是 UTC），都记成马来西亚时间
         (datetime.now(MALAYSIA_TZ).strftime("%Y-%m-%d %H:%M:%S"), today().isoformat(),
-         role, action, detail, order_id),
+         role, action, detail, order_id, amount),
     )
     return cur.lastrowid
+
+
+def losses_prevented_this_month(conn):
+    """本模拟月避免的损失（RM）：发现少收时的货值 + 店主确认的涨价差额，都记在日志的 amount 里。"""
+    month = today().isoformat()[:7]
+    total = conn.execute("SELECT SUM(amount) FROM logs WHERE amount IS NOT NULL AND sim_date LIKE ?",
+                         (month + "%",)).fetchone()[0]
+    return total or 0.0
 
 
 def has_log(conn, order_id, action, sim_date):
@@ -195,10 +200,13 @@ def load_seed_orders():
         try:
             delivery = date.fromisoformat(o["delivery_date"])
             status = o.get("status", PENDING)
-            if status not in STATUS_LABELS:
-                raise ValueError(f"status 只能是 {', '.join(STATUS_LABELS)}")
+            if status not in STATUSES:
+                raise ValueError(f"status 只能是 {', '.join(STATUSES)}")
             if int(o["quantity"]) <= 0:
                 raise ValueError("quantity 必须大于 0")
+            unit_price = o.get("unit_price")
+            if unit_price is not None and (isinstance(unit_price, bool) or float(unit_price) < 0):
+                raise ValueError("unit_price 必须是 0 或以上的数字")
             received_at = o.get("received_at")
             # 是否准时不用手填：有到货日期就和交货日期比较
             on_time = None if not received_at else int(date.fromisoformat(received_at) <= delivery)
@@ -206,7 +214,9 @@ def load_seed_orders():
                 date.fromisoformat(o["expiry_date"])
             rows.append((
                 o.get("supplier", ""), o.get("whatsapp", ""), o["product"], o.get("category", ""),
-                int(o["quantity"]), o.get("unit", ""), delivery.isoformat(), o.get("expiry_date"),
+                int(o["quantity"]), o.get("unit", ""),
+                float(unit_price) if unit_price is not None else None,
+                delivery.isoformat(), o.get("expiry_date"),
                 int(o.get("remind_days_before", 1)), 1 if o.get("auto_chase", True) else 0,
                 status, o.get("received_quantity"), received_at, on_time,
             ))
@@ -218,13 +228,24 @@ def load_seed_orders():
 
 
 def insert_orders(conn, rows):
+    """插入合成订单。已经是"少收"状态的订单，补写一条带金额的差异日志，
+    这样仪表盘上的"避免的损失"一打开就有数字。"""
     conn.executemany(
-        """INSERT INTO orders (supplier, whatsapp, product, category, quantity, unit,
+        """INSERT INTO orders (supplier, whatsapp, product, category, quantity, unit, unit_price,
                delivery_date, expiry_date, remind_days_before, auto_chase, status,
                received_quantity, received_at, on_time)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
+    for o in conn.execute("SELECT * FROM orders WHERE status IN (?, ?, ?) AND received_quantity < quantity",
+                          ISSUES).fetchall():
+        short = o["quantity"] - o["received_quantity"]
+        amount = round(short * o["unit_price"], 2) if o["unit_price"] is not None else None
+        add_log(conn, "系统", "discrepancy",
+                f"#{o['id']} {o['supplier']} {o['product']}: short {short} {o['unit']} "
+                f"(ordered {o['quantity']}, received {o['received_quantity']})"
+                f"{f' ≈ RM {amount:.2f}' if amount is not None else ''} (synthetic history)",
+                o["id"], amount)
 
 
 def init_db():
@@ -241,7 +262,7 @@ def init_db():
             rows = load_seed_orders()
             set_today(DEMO_START)
             insert_orders(conn, rows)
-            add_log(conn, "系统", "seeded", f"首次启动，载入 {len(rows)} 张合成订单")
+            add_log(conn, "系统", "seeded", f"First start: loaded {len(rows)} synthetic orders")
 
 
 def reset_db(role):
@@ -255,5 +276,5 @@ def reset_db(role):
         conn.execute("DELETE FROM sqlite_sequence")  # 让订单编号重新从 #1 开始
         insert_orders(conn, rows)
         add_log(conn, role, "demo_reset",
-                f"演示数据已重置：载入 {len(rows)} 张订单，模拟日期回到 {DEMO_START.isoformat()}")
+                f"Demo data reset: loaded {len(rows)} orders, simulated date back to {DEMO_START.isoformat()}")
     return len(rows)

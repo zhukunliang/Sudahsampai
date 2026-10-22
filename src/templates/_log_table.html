@@ -1,22 +1,25 @@
-{# 日志表格：/logs 页面和订单详情页底部共用这一份。用之前要先准备好 logs 变量 #}
-<table class="logs">
+{# 日志表格：活动日志页和订单详情页底部共用这一份。用之前要先准备好 logs 变量 #}
+<table class="table logs-table">
   <thead>
-    <tr><th>模拟日期</th><th>真实时间（马来西亚）</th><th>角色</th><th>动作</th><th>订单</th><th>内容</th></tr>
+    <tr>
+      <th>{{ t('col.sim_date') }}</th><th>{{ t('col.time') }}</th><th>{{ t('col.role') }}</th>
+      <th>{{ t('col.action') }}</th><th>{{ t('col.order') }}</th><th>{{ t('col.detail') }}</th>
+    </tr>
   </thead>
   <tbody>
     {% for l in logs %}
     <tr>
-      <td data-label="模拟日期">{{ l.sim_date }}</td>
-      <td data-label="真实时间（马来西亚）">{{ l.timestamp }}</td>
-      <td data-label="角色">{{ l.role }}</td>
-      <td data-label="动作"><span class="log-tag log-{{ l.color }}" title="{{ l.action }}">{{ l.tag }}</span></td>
-      <td data-label="订单">
-        {% if l.order_id %}<a href="{{ url_for('order_detail', order_id=l.order_id) }}">#{{ l.order_id }}</a>{% else %}—{% endif %}
+      <td data-label="{{ t('col.sim_date') }}">{{ l.sim_date }}</td>
+      <td data-label="{{ t('col.time') }}" class="muted">{{ l.timestamp }}</td>
+      <td data-label="{{ t('col.role') }}">{{ role_label(l.role) }}</td>
+      <td data-label="{{ t('col.action') }}"><span class="log-tag log-{{ l.color }}" title="{{ l.action }}">{{ t(l.tag) }}</span></td>
+      <td data-label="{{ t('col.order') }}">
+        {% if l.order_id %}<a class="order-chip" href="{{ url_for('order_detail', order_id=l.order_id) }}">#{{ l.order_id }}</a>{% else %}—{% endif %}
       </td>
-      <td data-label="内容">{{ l.detail }}</td>
+      <td data-label="{{ t('col.detail') }}" class="log-detail">{{ l.detail }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="6">还没有日志</td></tr>
+    <tr><td colspan="6" class="muted">{{ t('logs.empty') }}</td></tr>
     {% endfor %}
   </tbody>
 </table>

@@ -10,6 +10,7 @@ from flask import Flask, abort, flash, jsonify, redirect, render_template, reque
 import ai_parser  # 读懂供应商回复（AI，失败时自动换规则模式）
 import db
 import orbyte_adapter as orbyte  # 用户、联系人、发消息、待办、点数、审计日志都走这一层
+from i18n import LANGUAGES, current_language, rm, role_label, t, t_en
 
 app = Flask(__name__)
 # session 签名用的密钥：从环境变量读（Replit 的 Secrets 里设置 SECRET_KEY）。
@@ -20,55 +21,82 @@ db.init_db()
 
 @app.context_processor
 def inject_globals():
+    """每个模板都能用的东西：翻译函数 t、金额格式 rm、当前用户、credits、模拟日期等。"""
     with db.connect() as conn:
         credits = orbyte.credits_used_this_month(conn)
-    return {"sim_today": db.today().isoformat(), "user": orbyte.get_current_user(),
-            "role": current_role(), "roles": (OWNER, CLERK),
-            "is_owner": current_role() == OWNER, "credits_used": credits, "db": db}
+    return {"t": t, "rm": rm, "role_label": role_label, "languages": LANGUAGES, "lang": current_language(),
+            "sim_today": db.today().isoformat(), "user": orbyte.get_current_user(),
+            "role": current_role(), "roles": (OWNER, CLERK), "is_owner": current_role() == OWNER,
+            "credits_used": credits, "db": db}
 
 
-def describe_diff(quantity, received, unit):
-    """例如：少收 2 箱（订单 15，实收 13）"""
-    word = "少收" if received < quantity else "多收"
-    amount = f"{abs(received - quantity)} {unit}".strip()
-    return f"{word} {amount}（订单 {quantity}，实收 {received}）"
+@app.route("/lang/<code>")
+def set_language(code):
+    """切换界面语言（EN / BM / 中文），存在 session 里，然后回到原来的页面。"""
+    if code in LANGUAGES:
+        session["lang"] = code
+    return redirect(back_url())
+
+
+# ---------- 订单的计算（金额、差异、颜色、原因） ----------
+
+def money(quantity, unit_price):
+    """数量 × 单价；没有单价就是 None。"""
+    return round(quantity * unit_price, 2) if unit_price is not None else None
+
+
+def describe_diff(quantity, received, unit, unit_price=None):
+    """写日志用的英文说明，例如：Short 4 bottles (ordered 48, received 44) ≈ RM 25.60"""
+    word = "Short" if received < quantity else "Over"
+    n = abs(received - quantity)
+    amount = money(n, unit_price)
+    return (f"{word} {n} {unit} (ordered {quantity}, received {received})".replace("  ", " ")
+            + (f" ≈ {rm(amount)}" if amount is not None else ""))
+
+
+def diff_info(o):
+    """实收数量和订单不一样时，返回 {kind: short/over, n, unit, amount, ordered, received}；一样就返回 None。"""
+    if o["received_quantity"] is None or o["received_quantity"] == o["quantity"]:
+        return None
+    n = abs(o["received_quantity"] - o["quantity"])
+    return {"kind": "short" if o["received_quantity"] < o["quantity"] else "over", "n": n, "unit": o["unit"],
+            "amount": money(n, o["unit_price"]), "ordered": o["quantity"], "received": o["received_quantity"]}
+
+
+def diff_label(d):
+    """界面上显示的差异，例如 "Short 4 bottles ≈ RM 25.60"（跟着界面语言）。"""
+    text = t(f"diff.{d['kind']}", n=d["n"], unit=d["unit"])
+    return text + (f" ≈ {rm(d['amount'])}" if d["amount"] is not None else "")
 
 
 def decorate(row):
-    """给订单加上：中文状态、剩余天数、颜色标记 flag，以及为什么是这个颜色 flag_reason。"""
+    """给订单加上页面要用的信息：颜色 flag、剩余天数、为什么是这个颜色、差异、迟到天数、订单金额。
+    文字都存成 (key, 参数)，模板里用 t() 翻译成当前语言。"""
     o = dict(row)
-    o["status_label"] = db.STATUS_LABELS[o["status"]]
     days_left = (date.fromisoformat(o["delivery_date"]) - db.today()).days
     remind = o["remind_days_before"]
+    o["days_left"] = days_left
 
     if o["status"] in db.ISSUES:
-        o["flag"] = "diff"  # 橙色
-        o["days_text"] = "—"
-        o["flag_reason"] = f"实收数量和订单不一致（{o['status_label']}），等店主处理，所以标橙"
+        o["flag"], o["due"], o["reason"] = "diff", None, ("reason.issue", {})
     elif o["status"] == db.DELIVERED:
-        o["flag"] = ""
-        o["days_text"] = "—"
-        o["flag_reason"] = "已送达，不再提醒，所以不标颜色"
+        o["flag"], o["due"], o["reason"] = "done", None, ("reason.delivered", {})
     elif o["status"] == db.OVERDUE or days_left < 0:
-        o["flag"] = "late"  # 红色
-        o["days_text"] = f"逾期 {-days_left} 天"
-        o["flag_reason"] = f"交货日期 {o['delivery_date']} 已过 {-days_left} 天还没到货，所以标红"
+        o["flag"] = "late"
+        o["due"] = ("due.late", {"n": -days_left})
+        o["reason"] = ("reason.late", {"date": o["delivery_date"], "n": -days_left})
     elif days_left <= remind:
-        o["flag"] = "soon"  # 黄色
-        o["days_text"] = "今天到期" if days_left == 0 else f"还剩 {days_left} 天"
-        when = "今天就是交货日" if days_left == 0 else f"距交货还剩 {days_left} 天"
-        o["flag_reason"] = f"提前 {remind} 天提醒，{when}，所以标黄"
+        o["flag"] = "soon"
+        o["due"] = ("due.today", {}) if days_left == 0 else ("due.in", {"n": days_left})
+        o["reason"] = (("reason.soon_today", {"remind": remind}) if days_left == 0
+                       else ("reason.soon", {"remind": remind, "n": days_left}))
     else:
-        o["flag"] = ""
-        o["days_text"] = f"还剩 {days_left} 天"
-        o["flag_reason"] = f"提前 {remind} 天提醒，距交货还剩 {days_left} 天，还没到提醒时间，所以不标颜色"
+        o["flag"] = "normal"
+        o["due"] = ("due.in", {"n": days_left})
+        o["reason"] = ("reason.normal", {"remind": remind, "n": days_left})
 
-    # 实收数量和订单不一样时的说明文字
-    o["diff_text"] = ""
-    if o["received_quantity"] is not None and o["received_quantity"] != o["quantity"]:
-        o["diff_text"] = describe_diff(o["quantity"], o["received_quantity"], o["unit"])
-
-    # 迟到几天（准时或还没到货时是 0）
+    o["diff"] = diff_info(o)
+    o["value"] = money(o["quantity"], o["unit_price"])
     o["late_days"] = 0
     if o["received_at"]:
         o["late_days"] = max(0, (date.fromisoformat(o["received_at"]) -
@@ -83,6 +111,33 @@ def get_order(conn, order_id):
     return row
 
 
+# ---------- 仪表盘 ----------
+
+def build_dashboard(orders):
+    """四张数字卡片和"今日待办"三组。每个待办项：(图标, 文字 key, 参数, 按钮 key, 链接)。"""
+    must, know, waiting = [], [], []
+    for o in orders:
+        link = url_for("order_detail", order_id=o["id"]) + "#next"
+        names = {"product": o["product"], "supplier": o["supplier"]}
+        if o["status"] == db.DISCREPANCY:
+            must.append(("package-x", "todo.discrepancy", dict(names, diff=diff_label(o["diff"])), "btn.resolve", link))
+        elif o["flag"] == "late":
+            must.append(("alarm-clock", "todo.overdue", dict(names, days=-o["days_left"]), "btn.paste_reply", link))
+        elif o["flag"] == "soon":
+            key = "todo.arriving_today" if o["days_left"] == 0 else "todo.arriving"
+            button = "btn.confirm_receipt" if o["days_left"] == 0 else "btn.view"
+            know.append(("truck", key, dict(names, days=o["days_left"]), button, link))
+        elif o["status"] in db.WAITING:
+            key = "todo.restock" if o["status"] == db.RESTOCK_REQUESTED else "todo.negotiating"
+            waiting.append(("hourglass", key, names, "btn.follow_up", link))
+    return {
+        "needs_action": len(must),
+        "arriving": len(know),
+        "waiting": len(waiting),
+        "groups": [("todo.must", "must", must), ("todo.know", "know", know), ("todo.waiting", "waiting", waiting)],
+    }
+
+
 @app.route("/")
 def index():
     # 刚快进过的话，取出这次快进触发的事件做摘要；pop 表示只显示一次，刷新后就不再显示
@@ -90,7 +145,10 @@ def index():
     with db.connect() as conn:
         rows = conn.execute("SELECT * FROM orders ORDER BY delivery_date, id").fetchall()
         events = db.get_events_after(conn, ff_log_id) if ff_log_id else None
-    return render_template("index.html", orders=[decorate(r) for r in rows], events=events)
+        losses = db.losses_prevented_this_month(conn)
+    orders = [decorate(r) for r in rows]
+    return render_template("index.html", orders=orders, events=events, losses=losses,
+                           dash=build_dashboard(orders))
 
 
 # ---------- 角色和权限 ----------
@@ -113,7 +171,7 @@ def back_url():
 
 
 def owner_required(what):
-    """装饰器：被它包住的路由只有店主能用。what 是给用户看的操作名称，比如"修改提醒规则"。
+    """装饰器：被它包住的路由只有店主能用。what 是操作名称的 key，比如 "action.change_rules"。
     店员访问时不执行原来的函数，而是写一条 permission_denied 日志，显示统一的提示页（403）。"""
     def decorator(view):
         @wraps(view)  # 保留原函数的名字，url_for 才能照常找到它
@@ -123,7 +181,8 @@ def owner_required(what):
                 prefix = f"#{order_id} " if order_id else ""
                 with db.connect() as conn:
                     orbyte.write_audit(conn, "permission_denied",
-                                       f"{prefix}{current_role()}尝试{what}，已拒绝", order_id)
+                                       f"{prefix}{orbyte.get_current_user()['name']} (staff) tried to "
+                                       f"{t_en(what)} — denied", order_id)
                 back = url_for("order_detail", order_id=order_id) if order_id else url_for("index")
                 return render_template("denied.html", what=what, back=back), 403
             return view(*args, **kwargs)
@@ -136,19 +195,26 @@ def switch_role():
     """演示用：切换登录身份（模拟 Orbyte 登录）。每次切换都写日志。"""
     role = request.form.get("role")
     if role not in (OWNER, CLERK):
-        flash("没有这个角色", "error")
+        flash(t("flash.no_role"), "error")
     elif role != current_role():
         old = orbyte.get_current_user()
         session["role"] = role  # 模拟登录：真实 Orbyte 里身份来自单点登录，没有这个按钮
         new = orbyte.get_current_user()
         with db.connect() as conn:
             orbyte.write_audit(conn, "role_switched",
-                               f"{old['name']}（{old['role']}）→ {new['name']}（{new['role']}）")
-        flash(f"已切换为 {new['name']}（{new['role']}）", "ok")
+                               f"{old['name']} ({t_en(role_key(old))}) → {new['name']} ({t_en(role_key(new))})")
+        flash(t("flash.role", name=new["name"], role=role_label(new["role"])), "ok")
     return redirect(back_url())
 
 
-ORDER_FIELDS = ["supplier", "whatsapp", "product", "category", "quantity", "unit",
+def role_key(user):
+    """当前用户角色对应的翻译 key。"""
+    return "role.owner" if user["role"] == OWNER else "role.staff"
+
+
+# ---------- 新增订单 ----------
+
+ORDER_FIELDS = ["supplier", "whatsapp", "product", "category", "quantity", "unit", "unit_price",
                 "delivery_date", "expiry_date", "remind_days_before"]
 
 
@@ -160,39 +226,49 @@ def read_order_form(form):
 
 
 def validate_order(data):
-    """检查表单，返回错误列表；没有错误就返回空列表。顺便把数字和日期转换好。"""
+    """检查表单，返回错误列表（已经翻译成当前语言）；没有错误就返回空列表。顺便把数字和日期转换好。"""
     errors = []
 
     if not data["product"]:
-        errors.append("商品名不能为空")
+        errors.append(t("err.product"))
 
     try:
         data["quantity"] = int(data["quantity"])
         if data["quantity"] <= 0:
-            errors.append("数量必须大于 0")
+            errors.append(t("err.qty_positive"))
     except ValueError:
-        errors.append("数量必须是整数")
+        errors.append(t("err.qty_int"))
 
     if not data["delivery_date"]:
-        errors.append("交货日期不能为空")
+        errors.append(t("err.date_required"))
     else:
         try:
             date.fromisoformat(data["delivery_date"])
         except ValueError:
-            errors.append("交货日期格式不对")
+            errors.append(t("err.date_format"))
 
     if data["expiry_date"]:  # 保质期可以不填，填了就要是正确的日期
         try:
             date.fromisoformat(data["expiry_date"])
         except ValueError:
-            errors.append("保质期格式不对")
+            errors.append(t("err.expiry"))
 
     try:
         data["remind_days_before"] = int(data["remind_days_before"] or 1)
         if data["remind_days_before"] < 0:
-            errors.append("提前提醒天数不能是负数")
+            errors.append(t("err.remind_negative"))
     except ValueError:
-        errors.append("提前提醒天数必须是整数")
+        errors.append(t("err.remind_int"))
+
+    if data["unit_price"]:  # 单价可以不填，填了就要是 0 或以上的数字
+        try:
+            data["unit_price"] = round(float(data["unit_price"]), 2)
+            if data["unit_price"] < 0:
+                raise ValueError
+        except ValueError:
+            errors.append(t("err.price"))
+    else:
+        data["unit_price"] = None
 
     return errors
 
@@ -205,28 +281,31 @@ def new_order():
         return render_template("new.html", form=empty, errors=[])
 
     data = read_order_form(request.form)
+    form_values = dict(data)  # 出错时原样回填用户填的内容
     errors = validate_order(data)
     if errors:
-        # 400 = 请求有误；把已填写的内容 data 传回去，表单不会被清空
-        return render_template("new.html", form=data, errors=errors), 400
+        # 400 = 请求有误；把已填写的内容传回去，表单不会被清空
+        return render_template("new.html", form=form_values, errors=errors), 400
 
     with db.connect() as conn:
         cur = conn.execute(
-            """INSERT INTO orders (supplier, whatsapp, product, category, quantity, unit,
+            """INSERT INTO orders (supplier, whatsapp, product, category, quantity, unit, unit_price,
                    delivery_date, expiry_date, remind_days_before, auto_chase)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (data["supplier"], data["whatsapp"], data["product"], data["category"],
-             data["quantity"], data["unit"], data["delivery_date"],
+             data["quantity"], data["unit"], data["unit_price"], data["delivery_date"],
              data["expiry_date"] or None, data["remind_days_before"], 1 if data["auto_chase"] else 0),
         )
         order_id = cur.lastrowid
         # 日志：role 列记录"谁"，内容记录"新增了什么"
         orbyte.write_audit(conn, "order_created",
-                   f"#{order_id} 向 {data['supplier'] or '（未填供应商）'} 订 {data['product']} "
-                   f"{data['quantity']} {data['unit']}，交货 {data['delivery_date']}", order_id)
-    flash(f"已新增订单 #{order_id}", "ok")
+                           f"#{order_id} Ordered {data['quantity']} {data['unit']} {data['product']} "
+                           f"from {data['supplier'] or '(no supplier)'}, delivery {data['delivery_date']}", order_id)
+    flash(t("flash.created", id=order_id), "ok")
     return redirect(url_for("index"))
 
+
+# ---------- 订单详情 ----------
 
 # 订单详情：/orders/2。<int:...> 只匹配数字，所以不会和上面的 /orders/new 冲突
 @app.route("/orders/<int:order_id>")
@@ -235,15 +314,42 @@ def order_detail(order_id):
         return render_detail(conn, get_order(conn, order_id))
 
 
+def build_timeline(o, logs):
+    """状态时间线：下单 → 提醒 → 催货 → 回复 → 收货 → 处理。每一步：(key, 是否完成, 日期)。
+    日期取这一步第一次出现在日志里的模拟日期；合成数据没有日志的步骤用订单本身的日期。"""
+    first = {}
+    for log in reversed(logs):  # logs 是新的在前，倒过来才是按时间顺序
+        first.setdefault(log["action"], log["sim_date"])
+
+    def when(*actions):
+        dates = [first[a] for a in actions if a in first]
+        return min(dates) if dates else None
+
+    received = when("received", "discrepancy") or o["received_at"]
+    resolved = when("discrepancy_accepted", "restock_requested", "negotiating")
+    if o["status"] == db.DELIVERED and not resolved:
+        resolved = received
+    return [
+        ("tl.ordered", True, when("order_created")),
+        ("tl.reminded", bool(when("reminder")), when("reminder")),
+        ("tl.chased", bool(when("auto_chase")), when("auto_chase")),
+        ("tl.replied", bool(when("reply_analyzed")), when("reply_analyzed")),
+        ("tl.received", bool(received), received),
+        ("tl.resolved", bool(resolved), resolved),
+    ]
+
+
 def render_detail(conn, order_row, analysis=None, reply_text="", status=200):
-    """渲染订单详情页。analysis 是刚做完的 AI 分析结果（没有就不显示）。"""
+    """渲染订单详情页。analysis 是刚做完的回复分析结果（没有就不显示）。"""
     logs = db.get_logs(conn, order_row["id"])  # 页面底部显示这张订单自己的日志
-    return render_template("detail.html", o=decorate(order_row), logs=logs, analysis=analysis,
-                           reply_text=reply_text, samples=load_sample_replies()), status
+    o = decorate(order_row)
+    return render_template("detail.html", o=o, logs=logs, timeline=build_timeline(o, logs),
+                           analysis=analysis, reply_text=reply_text, samples=load_sample_replies(),
+                           diff_label=diff_label), status
 
 
 def load_sample_replies():
-    """data/sample_replies.json 里的供应商回复样例，给演示用。文件有问题就不显示样例。"""
+    """供应商回复样例，给演示用。文件有问题就不显示样例。"""
     try:
         with open(os.path.join(db.DATA_DIR, "sample_replies.json"), encoding="utf-8") as f:
             return json.load(f)
@@ -254,48 +360,77 @@ def load_sample_replies():
 # ---------- 读懂供应商回复（AI） ----------
 
 def suggest(o, result):
-    """根据解析结果给出建议（确定性规则，不是 AI）。返回 (建议列表, 确认后会做的修改说明或 None)。"""
+    """根据解析结果给出建议（确定性规则，不是 AI）。
+    返回 (建议列表, 修改列表)，每一项都是 (key, 参数)，页面用 t() 翻译，日志用 t_en()。
+    修改列表为空表示这条回复不会修改订单。"""
     tips, changes = [], []
     intent = result["intent"]
     if o["status"] not in db.AWAITING:
-        return [f"这张订单已经是「{db.STATUS_LABELS[o['status']]}」，不再根据回复修改。"], None
+        return [("tip.closed", {"status": t(f"status.{o['status']}")})], []
 
     if intent == "partial" and result["quantity"] is not None:
         short = o["quantity"] - result["quantity"]
         if short > 0:
-            tips.append(f"供应商这次只能送 {result['quantity']} {o['unit']}，比订单少 {short} {o['unit']}。"
-                        f"剩下的需要另外下单或跟进。")
+            amount = money(short, o["unit_price"])
+            tips.append(("tip.partial_short", {"q": result["quantity"], "unit": o["unit"], "short": short,
+                                               "money": f" ≈ {rm(amount)}" if amount is not None else ""}))
         else:
-            tips.append(f"供应商说送 {result['quantity']} {o['unit']}，不少于订单数量 {o['quantity']}。")
-        changes.append(f"订购数量 {o['quantity']} → {result['quantity']} {o['unit']}")
+            tips.append(("tip.partial_ok", {"q": result["quantity"], "unit": o["unit"]}))
+        changes.append(("change.qty", {"old": o["quantity"], "new": result["quantity"], "unit": o["unit"]}))
 
     # 延期，或者少货的同时说了新日期（例如 "Jumaat baru boleh hantar, 12 kotak je"）：日期也一起改
     if intent in ("delay", "partial") and result["new_delivery_date"]:
         old = date.fromisoformat(o["delivery_date"])
         new = date.fromisoformat(result["new_delivery_date"])
         days = (new - old).days
+        params = {"n": abs(days), "old": o["delivery_date"], "new": new.isoformat()}
         if days > 0:
-            tips.append(f"新交货日期比原定晚 {days} 天（{o['delivery_date']} → {new.isoformat()}）。"
-                        f"系统没有库存数据，请确认现有 {o['product']} 能撑到那天，否则可能缺货。")
+            tips.append(("tip.later", params))
         elif days < 0:
-            tips.append(f"新交货日期比原定早 {-days} 天（{o['delivery_date']} → {new.isoformat()}）。")
+            tips.append(("tip.earlier", params))
         elif intent == "delay":
-            tips.append("新交货日期和原定一样。")
+            tips.append(("tip.same", {}))
         if new < db.today():
-            tips.append("⚠ 这个日期已经过去了，可能解析错了，请核对原文。")
+            tips.append(("tip.past", {}))
         if days != 0:
-            changes.append(f"交货日期 {o['delivery_date']} → {new.isoformat()}")
+            changes.append(("change.date", {"old": o["delivery_date"], "new": new.isoformat()}))
 
     if changes:
-        return tips, "，".join(changes)
+        return tips, changes
     if intent == "price_change" and result["unit_price"] is not None:
-        tips.append(f"供应商说单价改为 RM {result['unit_price']:g}。系统目前不保存单价，"
-                    f"确认后只记录在日志里，请自行核对成本。")
-        return tips, f"记录新单价 RM {result['unit_price']:g}（不修改订单字段）"
+        new_price = result["unit_price"]
+        old_price = o["unit_price"]
+        if old_price is None:
+            tips.append(("tip.price_new", {"new": rm(new_price)}))
+        elif new_price == old_price:
+            tips.append(("tip.price_same", {"new": rm(new_price)}))
+        else:
+            diff = new_price - old_price
+            key = "tip.price_up" if diff > 0 else "tip.price_down"
+            tips.append((key, {"diff": rm(abs(diff)), "unit": o["unit"] or "unit", "old": rm(old_price),
+                               "new": rm(new_price), "total": rm(abs(diff) * o["quantity"])}))
+        if new_price != old_price:
+            changes.append(("change.price", {"old": rm(old_price) if old_price is not None else "—",
+                                             "new": rm(new_price)}))
+        return tips, changes
     if intent == "confirm":
-        tips.append(f"供应商确认会按原定 {o['delivery_date']} 送货。")
-        return tips, "记录供应商已确认（不修改订单字段）"
-    return tips, None
+        tips.append(("tip.confirm", {"date": o["delivery_date"]}))
+        return tips, [("change.confirm", {})]
+    return tips, []
+
+
+def join_changes(changes, translate):
+    return ", ".join(translate(key, **params) for key, params in changes)
+
+
+def review_reason(parsed):
+    """"需要人工确认"的原因（key, 参数），给页面显示。"""
+    r = parsed["result"]
+    if r["intent"] == "unclear":
+        return ("analysis.reason_unclear", {})
+    if r["confidence"] < ai_parser.CONFIDENCE_THRESHOLD:
+        return ("analysis.reason_low", {"c": f"{r['confidence']:.2f}"})
+    return ("analysis.reason_invalid", {})
 
 
 @app.route("/orders/<int:order_id>/reply", methods=["POST"])
@@ -305,20 +440,22 @@ def analyze_reply(order_id):
     with db.connect() as conn:
         o = get_order(conn, order_id)
         parsed = ai_parser.parse_reply(reply_text, o, db.today())
-        tips, change = suggest(o, parsed["result"])
-        parsed.update(tips=tips, change=change, can_apply=bool(change) and not parsed["needs_review"])
+        tips, changes = suggest(o, parsed["result"])
+        parsed.update(tips=tips, change=join_changes(changes, t),
+                      can_apply=bool(changes) and not parsed["needs_review"],
+                      review_reason=review_reason(parsed) if parsed["needs_review"] else None)
         r = parsed["result"]
         orbyte.write_audit(conn, "reply_analyzed",
                            f"#{order_id} {parsed['mode_note']}"
-                           f"{'（' + parsed['mode_reason'] + '）' if parsed['mode_reason'] else ''} "
-                           f"解析供应商回复「{reply_text[:200]}」→ "
+                           f"{' (' + parsed['mode_reason'] + ')' if parsed['mode_reason'] else ''} "
+                           f"read supplier reply \"{reply_text[:200]}\" → "
                            f"intent={r['intent']}, confidence={r['confidence']:.2f}"
-                           f"{'，需要人工确认' if parsed['needs_review'] else ''}", order_id)
+                           f"{', needs human check' if parsed['needs_review'] else ''}", order_id)
         return render_detail(conn, o, analysis=parsed, reply_text=reply_text)
 
 
 @app.route("/orders/<int:order_id>/reply/apply", methods=["POST"])
-@owner_required("确认更新订单（根据供应商回复）")
+@owner_required("action.apply_reply")
 def apply_reply(order_id):
     """店主确认后才真正修改订单。表单把页面上显示的解析结果带回来，后端再校验一次。"""
     form = request.form
@@ -334,11 +471,12 @@ def apply_reply(order_id):
     reply_text = form.get("reply_text", "")
     with db.connect() as conn:
         o = get_order(conn, order_id)
-        tips, change = suggest(o, result)
-        if problems or result["confidence"] < ai_parser.CONFIDENCE_THRESHOLD or not change:
-            flash("这条解析结果需要人工确认，订单没有修改。", "error")
+        tips, changes = suggest(o, result)
+        if problems or result["confidence"] < ai_parser.CONFIDENCE_THRESHOLD or not changes:
+            flash(t("flash.reply_rejected"), "error")
             return redirect(url_for("order_detail", order_id=order_id))
 
+        amount = None  # 涨价时：这张订单因此多付的钱，记为"避免的损失"
         if result["intent"] == "partial":
             conn.execute("UPDATE orders SET quantity = ? WHERE id = ?", (result["quantity"], order_id))
         if result["intent"] in ("delay", "partial") and result["new_delivery_date"]:
@@ -346,14 +484,18 @@ def apply_reply(order_id):
             new_status = db.PENDING if result["new_delivery_date"] >= db.today().isoformat() else o["status"]
             conn.execute("UPDATE orders SET delivery_date = ?, status = ? WHERE id = ?",
                          (result["new_delivery_date"], new_status, order_id))
-        # price_change / confirm：不改订单字段，只写日志
+        if result["intent"] == "price_change":
+            conn.execute("UPDATE orders SET unit_price = ? WHERE id = ?", (result["unit_price"], order_id))
+            if o["unit_price"] is not None and result["unit_price"] > o["unit_price"]:
+                amount = money(o["quantity"], result["unit_price"] - o["unit_price"])
+        # confirm：不改订单字段，只写日志
 
         user = orbyte.get_current_user()
         orbyte.write_audit(conn, "reply_applied",
-                           f"#{order_id} 店主 {user['name']} 确认更新：{change}。"
-                           f"原文：「{reply_text[:200]}」。解析结果：{json.dumps(result, ensure_ascii=False)}",
-                           order_id)
-    flash(f"已更新订单：{change}", "ok")
+                           f"#{order_id} {user['name']} (owner) confirmed: {join_changes(changes, t_en)}. "
+                           f"Original: \"{reply_text[:200]}\". Parsed: {json.dumps(result, ensure_ascii=False)}",
+                           order_id, amount=amount)
+    flash(t("flash.reply_applied", change=join_changes(changes, t)), "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
 
@@ -371,7 +513,7 @@ def old_order_url(order_id):
 
 
 @app.route("/orders/<int:order_id>/rules", methods=["POST"])
-@owner_required("修改提醒规则")  # 后端检查：就算绕过页面上禁用的输入框直接提交，也会被挡住
+@owner_required("action.change_rules")  # 后端检查：就算绕过页面上禁用的输入框直接提交，也会被挡住
 def update_rules(order_id):
     with db.connect() as conn:
         o = get_order(conn, order_id)
@@ -380,17 +522,19 @@ def update_rules(order_id):
             if remind < 0:
                 raise ValueError
         except (KeyError, ValueError):
-            flash("提前提醒天数要填 0 或以上的整数", "error")
+            flash(t("flash.rules_invalid"), "error")
             return redirect(url_for("order_detail", order_id=order_id))
         auto = 1 if request.form.get("auto_chase") else 0
         conn.execute("UPDATE orders SET remind_days_before = ?, auto_chase = ? WHERE id = ?",
                      (remind, auto, order_id))
         orbyte.write_audit(conn, "rules_updated",
-                   f"#{order_id} 提前提醒 {o['remind_days_before']}→{remind} 天，"
-                   f"自动催货 {'开' if o['auto_chase'] else '关'}→{'开' if auto else '关'}", order_id)
-    flash("提醒规则已保存", "ok")
+                           f"#{order_id} Remind {o['remind_days_before']}→{remind} day(s) before, "
+                           f"auto-chase {'on' if o['auto_chase'] else 'off'}→{'on' if auto else 'off'}", order_id)
+    flash(t("flash.rules_saved"), "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
+
+# ---------- 收货核对 ----------
 
 def parse_received_quantity(value):
     """实收数量必须是 0 或以上的整数；不合格返回 None。"""
@@ -404,7 +548,7 @@ def parse_received_quantity(value):
 def check_delivery(conn, o, received):
     """收货核对（网页表单和 POST /api/delivery-check 共用这一段）：
     记录实收数量和到货日期、判断是否准时、扣 1 Orbyte credit；
-    数量不一致时改成 discrepancy，并给店主发一条 Orbyte 待办。返回结果字典。"""
+    数量不一致时改成 discrepancy，记下少收的货值（避免的损失），并给店主发一条 Orbyte 待办。"""
     order_id = o["id"]
     # 用模拟日期记录到货时间，并和交货日期比较，记下是否准时（以后算供应商准时率）
     received_at = db.today()
@@ -415,21 +559,24 @@ def check_delivery(conn, o, received):
            WHERE id = ?""",
         (status, received, received_at.isoformat(), 1 if on_time else 0, order_id),
     )
-    timing = "准时" if on_time else "迟到"
+    timing = "on time" if on_time else "late"
     result = {"order_id": order_id, "status": status, "received_quantity": received,
               "received_at": received_at.isoformat(), "on_time": on_time,
               "discrepancy": None, "approval": None}
     if status == db.DELIVERED:
         orbyte.write_audit(conn, "received",
-                           f"#{order_id} {o['product']} 实收 {received} {o['unit']}，数量一致，{timing}", order_id)
+                           f"#{order_id} {o['product']}: received {received} {o['unit']}, quantity matches, {timing}",
+                           order_id)
     else:
-        text = describe_diff(o["quantity"], received, o["unit"])
-        orbyte.write_audit(conn, "discrepancy",
-                           f"#{order_id} {o['supplier']} {o['product']}：{text}，{timing}", order_id)
+        text = describe_diff(o["quantity"], received, o["unit"], o["unit_price"])
+        short = o["quantity"] - received
+        loss = money(short, o["unit_price"]) if short > 0 else None  # 只有少收才算避免的损失
+        orbyte.write_audit(conn, "discrepancy", f"#{order_id} {o['supplier']} {o['product']}: {text}, {timing}",
+                           order_id, amount=loss)
         # 有差异：交给店主决定（人始终掌控），通过 Orbyte 待办通知
         result["discrepancy"] = text
-        result["approval"] = orbyte.create_approval(conn, order_id, "处理数量差异", text)
-    result["credits_used_this_month"] = orbyte.charge_credit(conn, f"收货核对 #{order_id}", order_id)
+        result["approval"] = orbyte.create_approval(conn, order_id, "Resolve quantity mismatch", text)
+    result["credits_used_this_month"] = orbyte.charge_credit(conn, f"delivery check #{order_id}", order_id)
     return result
 
 
@@ -439,17 +586,18 @@ def receive(order_id):
     with db.connect() as conn:
         o = get_order(conn, order_id)
         if o["status"] not in db.AWAITING:
-            flash("这张订单已经收过货了", "error")
+            flash(t("flash.already_received"), "error")
             return redirect(url_for("order_detail", order_id=order_id))
         received = parse_received_quantity(request.form.get("received_quantity"))
         if received is None:
-            flash("实收数量要填 0 或以上的整数", "error")
+            flash(t("flash.qty_invalid"), "error")
             return redirect(url_for("order_detail", order_id=order_id))
         result = check_delivery(conn, o, received)
+        updated = decorate(get_order(conn, order_id))
     if result["discrepancy"]:
-        flash(f"数量不一致：{result['discrepancy']}。已发送到店主的 Orbyte 待办", "error")
+        flash(t("flash.received_diff", diff=diff_label(updated["diff"])), "error")
     else:
-        flash("已确认收货，数量一致", "ok")
+        flash(t("flash.received_ok"), "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
 
@@ -461,45 +609,49 @@ def api_delivery_check():
     order_id = body.get("order_id")
     received = parse_received_quantity(body.get("received_quantity"))
     if not isinstance(order_id, int) or received is None:
-        return jsonify(error="order_id 必须是整数，received_quantity 必须是 0 或以上的整数"), 400
+        return jsonify(error="order_id must be an integer and received_quantity an integer of 0 or more"), 400
     with db.connect() as conn:
         o = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
         if o is None:
-            return jsonify(error=f"订单 #{order_id} 不存在"), 404
+            return jsonify(error=f"Order #{order_id} does not exist"), 404
         if o["status"] not in db.AWAITING:
-            return jsonify(error=f"订单 #{order_id} 已经收过货了", status=o["status"]), 409
+            return jsonify(error=f"Order #{order_id} has already been received", status=o["status"]), 409
         result = check_delivery(conn, o, received)
     return jsonify(result), 200
 
 
-# 店主处理数量差异的三个选择：按钮的值 → (新状态, 日志动作, 日志说明)
+# ---------- 处理差异 ----------
+
+# 店主处理数量差异的三个选择：按钮的值 → (新状态, 日志动作, 日志说明, 提示 key)
 RESOLUTIONS = {
-    "accept": (db.DELIVERED, "discrepancy_accepted", "接受实收数量"),
-    "restock": (db.RESTOCK_REQUESTED, "restock_requested", "要求供应商补货"),
-    "negotiate": (db.NEGOTIATING, "negotiating", "标记为待协商"),
+    "accept": (db.DELIVERED, "discrepancy_accepted", "accepted the received quantity", "flash.resolved_accept"),
+    "restock": (db.RESTOCK_REQUESTED, "restock_requested", "asked the supplier to restock", "flash.resolved_restock"),
+    "negotiate": (db.NEGOTIATING, "negotiating", "marked for negotiation", "flash.resolved_negotiate"),
 }
 
 
 @app.route("/orders/<int:order_id>/resolve", methods=["POST"])
-@owner_required("处理数量差异")
+@owner_required("action.resolve")
 def resolve(order_id):
     with db.connect() as conn:
         o = get_order(conn, order_id)
         if o["status"] not in db.ISSUES:
-            flash("这张订单没有需要处理的数量差异", "error")
+            flash(t("flash.no_issue"), "error")
             return redirect(url_for("order_detail", order_id=order_id))
         choice = request.form.get("choice")
         if choice not in RESOLUTIONS:
-            flash("请选择一个处理方式", "error")
+            flash(t("flash.choose"), "error")
             return redirect(url_for("order_detail", order_id=order_id))
 
-        new_status, action, label = RESOLUTIONS[choice]
+        new_status, action, label, message = RESOLUTIONS[choice]
         conn.execute("UPDATE orders SET status = ? WHERE id = ?", (new_status, order_id))
-        text = describe_diff(o["quantity"], o["received_quantity"], o["unit"])
-        orbyte.write_audit(conn, action, f"#{order_id} {o['product']}（{text}）：{label}", order_id)
-    flash(f"已{label}", "ok")
+        text = describe_diff(o["quantity"], o["received_quantity"], o["unit"], o["unit_price"])
+        orbyte.write_audit(conn, action, f"#{order_id} {o['product']} ({text}): owner {label}", order_id)
+    flash(t(message), "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
+
+# ---------- 快进 1 天 ----------
 
 def chase_message(o, supplier):
     """生成礼貌的英文 + 马来文催货消息。supplier 是从 Orbyte 联系人读到的供应商名。"""
@@ -525,20 +677,20 @@ def time_forward():
       没开就写一条说明
     - 已经逾期的订单，开了自动催货的话每天再催一次
     - 同一张订单同一天不重复提醒、不重复催（先用 has_log 查当天有没有写过）"""
-    t = db.advance_day()
+    t_day = db.advance_day()
     with db.connect() as conn:
-        ff_log_id = orbyte.write_audit(conn, "time_forward", f"模拟日期 → {t.isoformat()}")
+        ff_log_id = orbyte.write_audit(conn, "time_forward", f"Simulated date → {t_day.isoformat()}")
         rows = conn.execute("SELECT * FROM orders WHERE status IN (?, ?)",
                             (db.PENDING, db.OVERDUE)).fetchall()
         for o in rows:
-            days_left = (date.fromisoformat(o["delivery_date"]) - t).days
+            days_left = (date.fromisoformat(o["delivery_date"]) - t_day).days
 
             if days_left >= 0:
                 # 还没到交货日期：进入提醒范围才提醒；同一天已经提醒过就跳过
-                if days_left <= o["remind_days_before"] and not db.has_log(conn, o["id"], "reminder", t.isoformat()):
+                if days_left <= o["remind_days_before"] and not db.has_log(conn, o["id"], "reminder", t_day.isoformat()):
                     orbyte.write_audit(conn, "reminder",
-                                       f"提醒店主：#{o['id']} {o['product']}预计 {o['delivery_date'][5:]} 送达",
-                                       o["id"], actor=orbyte.SYSTEM)
+                                       f"Reminder to owner: #{o['id']} {o['product']} is expected on "
+                                       f"{o['delivery_date'][5:]}", o["id"], actor=orbyte.SYSTEM)
                 continue
 
             # 已经过了交货日期
@@ -547,17 +699,18 @@ def time_forward():
                 conn.execute("UPDATE orders SET status = ? WHERE id = ?", (db.OVERDUE, o["id"]))
             if o["auto_chase"]:
                 # 同一张订单同一天不重复催：先查今天有没有催过
-                if not db.has_log(conn, o["id"], "auto_chase", t.isoformat()):
+                if not db.has_log(conn, o["id"], "auto_chase", t_day.isoformat()):
                     contact = orbyte.get_supplier_contact(o)
                     message = chase_message(o, contact["name"])
                     receipt = orbyte.send_message(contact, message)
                     orbyte.write_audit(conn, "auto_chase",
-                                       f"#{o['id']} 已逾期 {-days_left} 天，催货消息已通过 Orbyte Connect 发往 "
-                                       f"WhatsApp {receipt['to'] or '未填'}（模拟发送）：\n\n{message}",
+                                       f"#{o['id']} {-days_left} day(s) overdue. Chase message sent via Orbyte "
+                                       f"Connect to WhatsApp {receipt['to'] or '(none)'} (simulated):\n\n{message}",
                                        o["id"], actor=orbyte.SYSTEM)
-                    orbyte.charge_credit(conn, f"自动催货 #{o['id']}", o["id"])
+                    orbyte.charge_credit(conn, f"automatic chase #{o['id']}", o["id"])
             elif newly_overdue:
-                orbyte.write_audit(conn, "overdue", f"#{o['id']} {o['product']} 已逾期，按店主设置不自动催货",
+                orbyte.write_audit(conn, "overdue",
+                                   f"#{o['id']} {o['product']} is overdue; auto-chase is off by owner's setting",
                                    o["id"], actor=orbyte.SYSTEM)
 
     # 记住这次快进的日志编号，首页据此显示"这次快进触发了哪些事件"
@@ -565,20 +718,25 @@ def time_forward():
     return redirect(url_for("index"))
 
 
+# ---------- 重置演示数据 ----------
+
 @app.route("/reset", methods=["POST"])
-@owner_required("重置演示数据")  # 会清空所有订单和日志，只能店主做
+@owner_required("action.reset")  # 会清空所有订单和日志，只能店主做
 def reset():
-    """演示前一键恢复：清空数据库，重新载入 data/seed_orders.json，模拟日期回到 2026-10-21。"""
+    """演示前一键恢复：清空数据库，重新载入合成数据，模拟日期回到 2026-10-21。"""
     try:
         count = db.reset_db(current_role())
     except (OSError, ValueError) as e:
-        # seed_orders.json 不见了或写错了：现有数据没有被删，把问题告诉用户
-        flash(f"重置失败，现有数据没有改动。原因：{e}", "error")
+        # 合成数据文件不见了或写错了：现有数据没有被删。具体原因打印到服务器日志，方便队友修
+        print(f"Demo reset failed: {e}")
+        flash(t("flash.reset_failed"), "error")
         return redirect(back_url())
     session.pop("ff_log_id", None)  # 旧的快进摘要已经没有意义了
-    flash(f"演示数据已重置：载入 {count} 张订单，模拟日期回到 {db.DEMO_START.isoformat()}", "ok")
+    flash(t("flash.reset_ok", n=count, date=db.DEMO_START.isoformat()), "ok")
     return redirect(url_for("index"))
 
+
+# ---------- 活动日志 ----------
 
 @app.route("/logs")
 def show_logs():
@@ -586,7 +744,7 @@ def show_logs():
     order_text = request.args.get("order", "").strip().lstrip("#")
     order_id = int(order_text) if order_text.isdigit() else None
     if order_text and order_id is None:
-        flash("订单编号要填数字", "error")
+        flash(t("flash.order_filter"), "error")
     with db.connect() as conn:
         logs = db.get_logs(conn, order_id)
     return render_template("logs.html", logs=logs, order_id=order_id)

@@ -84,7 +84,7 @@ class SudahsampaiTest(unittest.TestCase):
             "unit": "箱", "delivery_date": "2026-10-25", "remind_days_before": "1",
         })
         self.assertEqual(response.status_code, 400)
-        self.assertIn("数量必须大于 0", response.get_data(as_text=True))
+        self.assertIn("Quantity must be greater than 0", response.get_data(as_text=True))  # 界面默认英文
         with db.connect() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0], 0)
 
@@ -115,7 +115,7 @@ class SudahsampaiTest(unittest.TestCase):
         logs = self.logs("discrepancy")
         self.assertEqual(len(logs), 1)
         self.assertEqual(logs[0]["order_id"], order_id)
-        self.assertIn("少收 2 箱（订单 15，实收 13）", logs[0]["detail"])
+        self.assertIn("Short 2 箱 (ordered 15, received 13)", logs[0]["detail"])  # 日志统一用英文写
 
     # ---------- 4. 店员改提醒规则 → 403 + permission_denied ----------
 

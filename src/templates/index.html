@@ -1,61 +1,139 @@
 {% extends "base.html" %}
+{% import "_macros.html" as m with context %}
 {% block content %}
 
 {# 刚点过"快进 1 天"时，在顶部显示这次触发了哪些事件 #}
 {% if events is not none %}
-<div class="card ff-summary">
-  <h2>已快进到 {{ sim_today }}</h2>
+<section class="card ff-summary">
+  <h2><i data-lucide="fast-forward"></i> {{ t('ff.title', date=sim_today) }}</h2>
   {% set reminders = events|selectattr("action", "equalto", "reminder")|list %}
   {% set chases = events|selectattr("action", "equalto", "auto_chase")|list %}
   {% set unchased = events|selectattr("action", "equalto", "overdue")|list %}
-  <p>
-    提醒 <b>{{ reminders|length }}</b> 条 ·
-    自动催货 <b>{{ chases|length }}</b> 条 ·
-    逾期未催 <b>{{ unchased|length }}</b> 条
-  </p>
+  <p class="muted">{{ t('ff.counts', r=reminders|length, c=chases|length, o=unchased|length) }}</p>
   {% if events %}
-  <ul class="events">
+  <ul class="event-list">
     {% for e in events %}
     <li>
-      <span class="log-tag log-{{ e.color }}">{{ e.tag }}</span>
-      <a href="{{ url_for('order_detail', order_id=e.order_id) }}">#{{ e.order_id }}</a>
+      <span class="log-tag log-{{ e.color }}">{{ t(e.tag) }}</span>
+      <a class="order-chip" href="{{ url_for('order_detail', order_id=e.order_id) }}">#{{ e.order_id }}</a>
       {% if e.action == "auto_chase" %}
-        已逾期，已生成催货消息
-        <details><summary>查看消息</summary><div class="message">{{ e.detail }}</div></details>
+        <span>{{ t('ff.chase_sent') }}</span>
+        <details><summary>{{ t('ff.view_message') }}</summary><div class="message">{{ e.detail }}</div></details>
       {% else %}
-        {{ e.detail }}
+        <span>{{ e.detail }}</span>
       {% endif %}
     </li>
     {% endfor %}
   </ul>
   {% else %}
-  <p class="muted">这一天没有新的提醒或逾期。</p>
+  <p class="muted">{{ t('ff.none') }}</p>
   {% endif %}
-</div>
+</section>
 {% endif %}
 
-<h1>订单列表</h1>
-<p class="legend"><span class="soon">黄色 = 快到期</span><span class="late">红色 = 逾期</span><span class="diff">橙色 = 数量有差异</span></p>
-<table>
-  <thead>
-    <tr>
-      <th>#</th><th>供应商</th><th>商品</th><th>数量</th><th>交货日期</th><th>剩余</th><th>状态</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for o in orders %}
-    <tr class="{{ o.flag }}">
-      <td data-label="#"><a href="{{ url_for('order_detail', order_id=o.id) }}">#{{ o.id }} 查看</a></td>
-      <td data-label="供应商">{{ o.supplier }}</td>
-      <td data-label="商品">{{ o.product }}</td>
-      <td data-label="数量">{{ o.quantity }} {{ o.unit }}</td>
-      <td data-label="交货日期">{{ o.delivery_date }}</td>
-      <td data-label="剩余">{{ o.days_text }}</td>
-      <td data-label="状态">{{ o.status_label }}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="7">还没有订单</td></tr>
+<div class="page-head">
+  <div>
+    <h1>{{ t('dash.title') }}</h1>
+    <p class="muted">{{ t('dash.subtitle') }}</p>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('new_order') }}"><i data-lucide="plus"></i> {{ t('nav.new_order') }}</a>
+</div>
+
+{# 四张数字卡片 #}
+<section class="stats">
+  <div class="stat stat-red">
+    <div class="stat-icon"><i data-lucide="circle-alert"></i></div>
+    <div><div class="stat-value">{{ dash.needs_action }}</div><div class="stat-label">{{ t('card.needs_action') }}</div>
+    <div class="stat-hint">{{ t('card.needs_action_hint') }}</div></div>
+  </div>
+  <div class="stat stat-amber">
+    <div class="stat-icon"><i data-lucide="truck"></i></div>
+    <div><div class="stat-value">{{ dash.arriving }}</div><div class="stat-label">{{ t('card.arriving') }}</div>
+    <div class="stat-hint">{{ t('card.arriving_hint') }}</div></div>
+  </div>
+  <div class="stat stat-blue">
+    <div class="stat-icon"><i data-lucide="hourglass"></i></div>
+    <div><div class="stat-value">{{ dash.waiting }}</div><div class="stat-label">{{ t('card.waiting') }}</div>
+    <div class="stat-hint">{{ t('card.waiting_hint') }}</div></div>
+  </div>
+  <div class="stat stat-green">
+    <div class="stat-icon"><i data-lucide="shield-check"></i></div>
+    <div><div class="stat-value">{{ rm(losses) }}</div><div class="stat-label">{{ t('card.losses') }}</div>
+    <div class="stat-hint">{{ t('card.losses_hint') }}</div></div>
+  </div>
+</section>
+
+{# 今日待办：必须处理 / 需要了解 / 等待回复，每一项都有直接操作的按钮 #}
+<section class="card">
+  <h2><i data-lucide="list-checks"></i> {{ t('todo.title') }}</h2>
+  {% if not (dash.groups[0][2] or dash.groups[1][2] or dash.groups[2][2]) %}
+    <p class="muted">{{ t('todo.all_clear') }}</p>
+  {% else %}
+  <div class="todo-groups">
+    {% for title, kind, items in dash.groups %}
+    <div class="todo-group todo-{{ kind }}">
+      <h3>{{ t(title) }} <span class="count">{{ items|length }}</span></h3>
+      {% for icon, key, params, button, link in items %}
+      <div class="todo-item">
+        <i data-lucide="{{ icon }}" class="todo-icon"></i>
+        <span class="todo-text">{{ t(key, **params) }}</span>
+        <a class="btn btn-small {{ 'btn-primary' if kind == 'must' else 'btn-secondary' }}" href="{{ link }}">{{ t(button) }}</a>
+      </div>
+      {% else %}
+      <p class="muted small">{{ t('todo.empty') }}</p>
+      {% endfor %}
+    </div>
     {% endfor %}
-  </tbody>
-</table>
+  </div>
+  {% endif %}
+</section>
+
+{# 完整订单列表：桌面是表格，手机是卡片 #}
+<section class="card">
+  <div class="section-head">
+    <h2><i data-lucide="clipboard-list"></i> {{ t('orders.title') }}</h2>
+    <span class="muted small">{{ t('orders.count', n=orders|length) }}</span>
+  </div>
+
+  <table class="table orders-table">
+    <thead>
+      <tr>
+        <th>{{ t('col.order') }}</th><th>{{ t('col.supplier') }}</th><th>{{ t('col.item') }}</th>
+        <th class="num">{{ t('col.qty') }}</th><th class="num">{{ t('col.value') }}</th>
+        <th>{{ t('col.delivery') }}</th><th>{{ t('col.due') }}</th><th>{{ t('col.status') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in orders %}
+      <tr class="row-{{ o.flag }}">
+        <td>{{ m.order_chip(o) }}</td>
+        <td>{{ o.supplier }}</td>
+        <td>{{ o.product }}</td>
+        <td class="num">{{ o.quantity }} {{ o.unit }}</td>
+        <td class="num">{{ rm(o.value) if o.value is not none else '—' }}</td>
+        <td>{{ o.delivery_date }}</td>
+        <td>{{ m.due_text(o) }}</td>
+        <td>{{ m.status_pill(o) }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="muted">{{ t('orders.empty') }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="order-cards">
+    {% for o in orders %}
+    <a class="order-card card-{{ o.flag }}" href="{{ url_for('order_detail', order_id=o.id) }}">
+      <div class="order-card-top">
+        <span class="order-card-supplier">{{ o.supplier }}</span>
+        {{ m.status_pill(o) }}
+      </div>
+      <div class="order-card-item">{{ o.product }} · {{ o.quantity }} {{ o.unit }}</div>
+      <div class="order-card-date"><i data-lucide="calendar"></i> {{ o.delivery_date }}{% if o.due %} · {{ m.due_text(o) }}{% endif %}</div>
+    </a>
+    {% else %}
+    <p class="muted">{{ t('orders.empty') }}</p>
+    {% endfor %}
+  </div>
+</section>
 {% endblock %}

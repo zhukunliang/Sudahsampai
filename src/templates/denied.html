@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 {# 店员访问只有店主能用的功能时，统一显示这一页（由 owner_required 装饰器返回） #}
-<div class="card">
-  <h1>没有权限</h1>
-  <p>「{{ what }}」仅店主可以操作，你现在的身份是<b>{{ role }}</b>。</p>
-  <p>如果你是店主，请点页面上方「角色」里的<b>店主</b>切换后再试。这次尝试已记录在日志里。</p>
-  <a class="btn" href="{{ back }}">返回</a>
-</div>
+<section class="card narrow center">
+  <div class="big-icon"><i data-lucide="lock"></i></div>
+  <h1>{{ t('denied.title') }}</h1>
+  <p>{{ t('denied.text', what=t(what), name=user.name, role=role_label(user.role)) }}</p>
+  <p class="muted">{{ t('denied.hint') }}</p>
+  <a class="btn btn-primary" href="{{ back }}"><i data-lucide="arrow-left"></i> {{ t('denied.back') }}</a>
+</section>
 {% endblock %}
