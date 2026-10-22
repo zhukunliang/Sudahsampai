@@ -5,7 +5,7 @@
 {% if o.status in db.ISSUES %}
 <div class="alert">
   ⚠ {{ o.diff_text }}
-  <div class="alert-sub">当前状态：{{ o.status_label }}</div>
+  <div class="alert-sub">当前状态：{{ o.status_label }} · 已发送到店主的 Orbyte 待办</div>
 </div>
 {% endif %}
 

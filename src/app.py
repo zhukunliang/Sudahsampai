@@ -4,9 +4,10 @@ from datetime import date
 from functools import wraps
 from urllib.parse import urlparse
 
-from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 
 import db
+import orbyte_adapter as orbyte  # 用户、联系人、发消息、待办、点数、审计日志都走这一层
 
 app = Flask(__name__)
 # session 签名用的密钥：从环境变量读（Replit 的 Secrets 里设置 SECRET_KEY）。
@@ -17,8 +18,11 @@ db.init_db()
 
 @app.context_processor
 def inject_globals():
-    return {"sim_today": db.today().isoformat(), "role": current_role(), "roles": (OWNER, CLERK),
-            "is_owner": current_role() == OWNER, "db": db}
+    with db.connect() as conn:
+        credits = orbyte.credits_used_this_month(conn)
+    return {"sim_today": db.today().isoformat(), "user": orbyte.get_current_user(),
+            "role": current_role(), "roles": (OWNER, CLERK),
+            "is_owner": current_role() == OWNER, "credits_used": credits, "db": db}
 
 
 def describe_diff(quantity, received, unit):
@@ -89,15 +93,13 @@ def index():
 
 # ---------- 角色和权限 ----------
 
-OWNER = "店主"
-CLERK = "店员"
+OWNER = orbyte.OWNER
+CLERK = orbyte.STAFF
 
 
 def current_role():
-    """当前角色存在 session（签名过的 cookie）里。还没选过时默认店主，方便演示；
-    万一读到不认识的值，按权限最小的店员处理。"""
-    role = session.get("role", OWNER)
-    return role if role in (OWNER, CLERK) else CLERK
+    """当前登录用户的角色，由 Orbyte 接口层提供（现在是模拟登录）。"""
+    return orbyte.get_current_user()["role"]
 
 
 def back_url():
@@ -118,8 +120,8 @@ def owner_required(what):
                 order_id = kwargs.get("order_id")  # 订单相关的路由会带 order_id，日志就能关联到订单
                 prefix = f"#{order_id} " if order_id else ""
                 with db.connect() as conn:
-                    db.add_log(conn, current_role(), "permission_denied",
-                               f"{prefix}{current_role()}尝试{what}，已拒绝", order_id)
+                    orbyte.write_audit(conn, "permission_denied",
+                                       f"{prefix}{current_role()}尝试{what}，已拒绝", order_id)
                 back = url_for("order_detail", order_id=order_id) if order_id else url_for("index")
                 return render_template("denied.html", what=what, back=back), 403
             return view(*args, **kwargs)
@@ -129,16 +131,18 @@ def owner_required(what):
 
 @app.route("/role", methods=["POST"])
 def switch_role():
-    """切换角色（模拟登录）。每次切换都写日志。"""
+    """演示用：切换登录身份（模拟 Orbyte 登录）。每次切换都写日志。"""
     role = request.form.get("role")
     if role not in (OWNER, CLERK):
         flash("没有这个角色", "error")
     elif role != current_role():
-        old = current_role()
-        session["role"] = role
+        old = orbyte.get_current_user()
+        session["role"] = role  # 模拟登录：真实 Orbyte 里身份来自单点登录，没有这个按钮
+        new = orbyte.get_current_user()
         with db.connect() as conn:
-            db.add_log(conn, role, "role_switched", f"{old} → {role}")
-        flash(f"已切换为{role}", "ok")
+            orbyte.write_audit(conn, "role_switched",
+                               f"{old['name']}（{old['role']}）→ {new['name']}（{new['role']}）")
+        flash(f"已切换为 {new['name']}（{new['role']}）", "ok")
     return redirect(back_url())
 
 
@@ -215,7 +219,7 @@ def new_order():
         )
         order_id = cur.lastrowid
         # 日志：role 列记录"谁"，内容记录"新增了什么"
-        db.add_log(conn, current_role(), "order_created",
+        orbyte.write_audit(conn, "order_created",
                    f"#{order_id} 向 {data['supplier'] or '（未填供应商）'} 订 {data['product']} "
                    f"{data['quantity']} {data['unit']}，交货 {data['delivery_date']}", order_id)
     flash(f"已新增订单 #{order_id}", "ok")
@@ -240,7 +244,6 @@ def old_order_url(order_id):
 @app.route("/orders/<int:order_id>/rules", methods=["POST"])
 @owner_required("修改提醒规则")  # 后端检查：就算绕过页面上禁用的输入框直接提交，也会被挡住
 def update_rules(order_id):
-    role = current_role()
     with db.connect() as conn:
         o = get_order(conn, order_id)
         try:
@@ -253,50 +256,91 @@ def update_rules(order_id):
         auto = 1 if request.form.get("auto_chase") else 0
         conn.execute("UPDATE orders SET remind_days_before = ?, auto_chase = ? WHERE id = ?",
                      (remind, auto, order_id))
-        db.add_log(conn, role, "rules_updated",
+        orbyte.write_audit(conn, "rules_updated",
                    f"#{order_id} 提前提醒 {o['remind_days_before']}→{remind} 天，"
                    f"自动催货 {'开' if o['auto_chase'] else '关'}→{'开' if auto else '关'}", order_id)
     flash("提醒规则已保存", "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
 
+def parse_received_quantity(value):
+    """实收数量必须是 0 或以上的整数；不合格返回 None。"""
+    try:
+        received = int(value)
+    except (TypeError, ValueError):
+        return None
+    return received if received >= 0 else None
+
+
+def check_delivery(conn, o, received):
+    """收货核对（网页表单和 POST /api/delivery-check 共用这一段）：
+    记录实收数量和到货日期、判断是否准时、扣 1 Orbyte credit；
+    数量不一致时改成 discrepancy，并给店主发一条 Orbyte 待办。返回结果字典。"""
+    order_id = o["id"]
+    # 用模拟日期记录到货时间，并和交货日期比较，记下是否准时（以后算供应商准时率）
+    received_at = db.today()
+    on_time = received_at <= date.fromisoformat(o["delivery_date"])
+    status = db.DELIVERED if received == o["quantity"] else db.DISCREPANCY
+    conn.execute(
+        """UPDATE orders SET status = ?, received_quantity = ?, received_at = ?, on_time = ?
+           WHERE id = ?""",
+        (status, received, received_at.isoformat(), 1 if on_time else 0, order_id),
+    )
+    timing = "准时" if on_time else "迟到"
+    result = {"order_id": order_id, "status": status, "received_quantity": received,
+              "received_at": received_at.isoformat(), "on_time": on_time,
+              "discrepancy": None, "approval": None}
+    if status == db.DELIVERED:
+        orbyte.write_audit(conn, "received",
+                           f"#{order_id} {o['product']} 实收 {received} {o['unit']}，数量一致，{timing}", order_id)
+    else:
+        text = describe_diff(o["quantity"], received, o["unit"])
+        orbyte.write_audit(conn, "discrepancy",
+                           f"#{order_id} {o['supplier']} {o['product']}：{text}，{timing}", order_id)
+        # 有差异：交给店主决定（人始终掌控），通过 Orbyte 待办通知
+        result["discrepancy"] = text
+        result["approval"] = orbyte.create_approval(conn, order_id, "处理数量差异", text)
+    result["credits_used_this_month"] = orbyte.charge_credit(conn, f"收货核对 #{order_id}", order_id)
+    return result
+
+
 @app.route("/orders/<int:order_id>/receive", methods=["POST"])
 def receive(order_id):
-    """确认收货：店主和店员都可以做。"""
-    role = current_role()
+    """确认收货（网页表单）：店主和店员都可以做。"""
     with db.connect() as conn:
         o = get_order(conn, order_id)
         if o["status"] not in db.AWAITING:
             flash("这张订单已经收过货了", "error")
             return redirect(url_for("order_detail", order_id=order_id))
-        try:
-            received = int(request.form["received_quantity"])
-            if received < 0:
-                raise ValueError
-        except (KeyError, ValueError):
+        received = parse_received_quantity(request.form.get("received_quantity"))
+        if received is None:
             flash("实收数量要填 0 或以上的整数", "error")
             return redirect(url_for("order_detail", order_id=order_id))
-
-        # 用模拟日期记录到货时间，并和交货日期比较，记下是否准时（以后算供应商准时率）
-        received_at = db.today()
-        on_time = received_at <= date.fromisoformat(o["delivery_date"])
-        status = db.DELIVERED if received == o["quantity"] else db.DISCREPANCY
-        conn.execute(
-            """UPDATE orders SET status = ?, received_quantity = ?, received_at = ?, on_time = ?
-               WHERE id = ?""",
-            (status, received, received_at.isoformat(), 1 if on_time else 0, order_id),
-        )
-        timing = "准时" if on_time else "迟到"
-        if status == db.DELIVERED:
-            db.add_log(conn, role, "received",
-                       f"#{order_id} {o['product']} 实收 {received} {o['unit']}，数量一致，{timing}", order_id)
-            flash("已确认收货，数量一致", "ok")
-        else:
-            text = describe_diff(o["quantity"], received, o["unit"])
-            db.add_log(conn, role, "discrepancy",
-                       f"#{order_id} {o['supplier']} {o['product']}：{text}，{timing}", order_id)
-            flash("已记录收货，但数量不一致，请店主处理", "error")
+        result = check_delivery(conn, o, received)
+    if result["discrepancy"]:
+        flash(f"数量不一致：{result['discrepancy']}。已发送到店主的 Orbyte 待办", "error")
+    else:
+        flash("已确认收货，数量一致", "ok")
     return redirect(url_for("order_detail", order_id=order_id))
+
+
+@app.route("/api/delivery-check", methods=["POST"])
+def api_delivery_check():
+    """对外接口：其他 Orbyte 模块（例如仓库扫码）提交收货数量，返回核对结果（JSON）。
+    请求：{"order_id": 2, "received_quantity": 13}。身份来自当前 Orbyte 登录（现在是模拟）。"""
+    body = request.get_json(silent=True) or {}
+    order_id = body.get("order_id")
+    received = parse_received_quantity(body.get("received_quantity"))
+    if not isinstance(order_id, int) or received is None:
+        return jsonify(error="order_id 必须是整数，received_quantity 必须是 0 或以上的整数"), 400
+    with db.connect() as conn:
+        o = conn.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone()
+        if o is None:
+            return jsonify(error=f"订单 #{order_id} 不存在"), 404
+        if o["status"] not in db.AWAITING:
+            return jsonify(error=f"订单 #{order_id} 已经收过货了", status=o["status"]), 409
+        result = check_delivery(conn, o, received)
+    return jsonify(result), 200
 
 
 # 店主处理数量差异的三个选择：按钮的值 → (新状态, 日志动作, 日志说明)
@@ -310,7 +354,6 @@ RESOLUTIONS = {
 @app.route("/orders/<int:order_id>/resolve", methods=["POST"])
 @owner_required("处理数量差异")
 def resolve(order_id):
-    role = current_role()
     with db.connect() as conn:
         o = get_order(conn, order_id)
         if o["status"] not in db.ISSUES:
@@ -324,14 +367,13 @@ def resolve(order_id):
         new_status, action, label = RESOLUTIONS[choice]
         conn.execute("UPDATE orders SET status = ? WHERE id = ?", (new_status, order_id))
         text = describe_diff(o["quantity"], o["received_quantity"], o["unit"])
-        db.add_log(conn, role, action, f"#{order_id} {o['product']}（{text}）：{label}", order_id)
+        orbyte.write_audit(conn, action, f"#{order_id} {o['product']}（{text}）：{label}", order_id)
     flash(f"已{label}", "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
 
-def chase_message(o):
-    """生成礼貌的英文 + 马来文催货消息模板（第二版会通过 WhatsApp 发给供应商）。"""
-    supplier = o["supplier"] or "Supplier"
+def chase_message(o, supplier):
+    """生成礼貌的英文 + 马来文催货消息。supplier 是从 Orbyte 联系人读到的供应商名。"""
     amount = f"{o['quantity']} {o['unit']}".strip()
     english = (
         f"Hello {supplier}, this is a friendly reminder about our order #{o['id']}: "
@@ -350,13 +392,13 @@ def chase_message(o):
 def time_forward():
     """模拟日期加 1 天，然后检查还没到货的订单：
     - 待送达、进入提醒范围 → 写 reminder 日志
-    - 过了交货日期 → 改成逾期；开了自动催货就写 auto_chase 日志（附催货消息），没开就写一条说明
+    - 过了交货日期 → 改成逾期；开了自动催货就通过 Orbyte Connect 发催货消息、扣 1 credit，
+      没开就写一条说明
     - 已经逾期的订单，开了自动催货的话每天再催一次
     - 同一张订单同一天不重复提醒、不重复催（先用 has_log 查当天有没有写过）"""
-    role = current_role()
     t = db.advance_day()
     with db.connect() as conn:
-        ff_log_id = db.add_log(conn, role, "time_forward", f"模拟日期 → {t.isoformat()}")
+        ff_log_id = orbyte.write_audit(conn, "time_forward", f"模拟日期 → {t.isoformat()}")
         rows = conn.execute("SELECT * FROM orders WHERE status IN (?, ?)",
                             (db.PENDING, db.OVERDUE)).fetchall()
         for o in rows:
@@ -365,8 +407,9 @@ def time_forward():
             if days_left >= 0:
                 # 还没到交货日期：进入提醒范围才提醒；同一天已经提醒过就跳过
                 if days_left <= o["remind_days_before"] and not db.has_log(conn, o["id"], "reminder", t.isoformat()):
-                    db.add_log(conn, "系统", "reminder",
-                               f"提醒店主：#{o['id']} {o['product']}预计 {o['delivery_date'][5:]} 送达", o["id"])
+                    orbyte.write_audit(conn, "reminder",
+                                       f"提醒店主：#{o['id']} {o['product']}预计 {o['delivery_date'][5:]} 送达",
+                                       o["id"], actor=orbyte.SYSTEM)
                 continue
 
             # 已经过了交货日期
@@ -376,13 +419,17 @@ def time_forward():
             if o["auto_chase"]:
                 # 同一张订单同一天不重复催：先查今天有没有催过
                 if not db.has_log(conn, o["id"], "auto_chase", t.isoformat()):
-                    db.add_log(conn, "系统", "auto_chase",
-                               f"#{o['id']} 已逾期 {-days_left} 天，已生成催货消息"
-                               f"（发往 WhatsApp {o['whatsapp'] or '未填'}，第二版实际发送）：\n\n{chase_message(o)}",
-                               o["id"])
+                    contact = orbyte.get_supplier_contact(o)
+                    message = chase_message(o, contact["name"])
+                    receipt = orbyte.send_message(contact, message)
+                    orbyte.write_audit(conn, "auto_chase",
+                                       f"#{o['id']} 已逾期 {-days_left} 天，催货消息已通过 Orbyte Connect 发往 "
+                                       f"WhatsApp {receipt['to'] or '未填'}（模拟发送）：\n\n{message}",
+                                       o["id"], actor=orbyte.SYSTEM)
+                    orbyte.charge_credit(conn, f"自动催货 #{o['id']}", o["id"])
             elif newly_overdue:
-                db.add_log(conn, "系统", "overdue",
-                           f"#{o['id']} {o['product']} 已逾期，按店主设置不自动催货", o["id"])
+                orbyte.write_audit(conn, "overdue", f"#{o['id']} {o['product']} 已逾期，按店主设置不自动催货",
+                                   o["id"], actor=orbyte.SYSTEM)
 
     # 记住这次快进的日志编号，首页据此显示"这次快进触发了哪些事件"
     session["ff_log_id"] = ff_log_id

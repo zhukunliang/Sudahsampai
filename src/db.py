@@ -58,6 +58,8 @@ ACTION_TAGS = {
     "permission_denied": ("权限拒绝", "purple"),
     "role_switched": ("角色切换", "gray-blue"),
     "demo_reset": ("重置", "gray"),
+    "approval_created": ("Orbyte 待办", "orange"),
+    "credit_charged": ("扣点", "gray-blue"),
 }
 OTHER_TAG = ("其他", "gray")
 

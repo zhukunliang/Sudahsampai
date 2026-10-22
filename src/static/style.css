@@ -12,8 +12,30 @@ header {
   color: #fff;
   padding: 10px 16px;
 }
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 0;
+}
 header a { color: #fff; text-decoration: none; margin-right: 14px; }
 header .title { font-weight: bold; margin-right: 18px; }
+header .breadcrumb { font-weight: normal; opacity: 0.75; }
+header .login { margin-left: auto; font-size: 13px; opacity: 0.9; }
+
+/* 右下角的 Orbyte credits 用量 */
+.credits {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 13px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+main { padding-bottom: 56px; }  /* 给右下角的 credits 留位置，不挡住内容 */
 .bar {
   display: flex;
   flex-wrap: wrap;
