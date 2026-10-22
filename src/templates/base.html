@@ -24,6 +24,11 @@
         <button type="submit" name="role" value="{{ r }}" class="{{ '' if r == role else 'secondary' }}">{{ r }}</button>
       {% endfor %}
     </form>
+    {# 重置演示数据：点之前先弹出确认框；店员看得到但按钮是禁用的（后端还有 owner_required 把关） #}
+    <form method="post" action="{{ url_for('reset') }}"
+          onsubmit="return confirm('确定要重置演示数据吗？\n\n所有订单和日志都会被清空，重新载入 seed_orders.json，模拟日期回到 2026-10-21。')">
+      <button type="submit" class="danger" {% if not is_owner %}disabled title="仅店主可重置"{% endif %}>重置演示数据</button>
+    </form>
   </div>
   <main>
     {% with messages = get_flashed_messages(with_categories=true) %}

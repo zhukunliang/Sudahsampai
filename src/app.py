@@ -38,24 +38,24 @@ def decorate(row):
     if o["status"] in db.ISSUES:
         o["flag"] = "diff"  # 橙色
         o["days_text"] = "—"
-        o["flag_reason"] = "实收数量和订单不一致，需要店主处理，所以显示橙色。"
+        o["flag_reason"] = f"实收数量和订单不一致（{o['status_label']}），等店主处理，所以标橙"
     elif o["status"] == db.DELIVERED:
         o["flag"] = ""
         o["days_text"] = "—"
-        o["flag_reason"] = "已经送达，不再提醒，所以不标颜色。"
+        o["flag_reason"] = "已送达，不再提醒，所以不标颜色"
     elif o["status"] == db.OVERDUE or days_left < 0:
         o["flag"] = "late"  # 红色
         o["days_text"] = f"逾期 {-days_left} 天"
-        o["flag_reason"] = f"交货日期 {o['delivery_date']} 已经过了 {-days_left} 天还没收到货，所以显示红色。"
+        o["flag_reason"] = f"交货日期 {o['delivery_date']} 已过 {-days_left} 天还没到货，所以标红"
     elif days_left <= remind:
         o["flag"] = "soon"  # 黄色
         o["days_text"] = "今天到期" if days_left == 0 else f"还剩 {days_left} 天"
-        when = "今天就是交货日期" if days_left == 0 else f"离交货日期还有 {days_left} 天"
-        o["flag_reason"] = f"{when}，已进入「提前 {remind} 天提醒」的范围，所以显示黄色。"
+        when = "今天就是交货日" if days_left == 0 else f"距交货还剩 {days_left} 天"
+        o["flag_reason"] = f"提前 {remind} 天提醒，{when}，所以标黄"
     else:
         o["flag"] = ""
         o["days_text"] = f"还剩 {days_left} 天"
-        o["flag_reason"] = f"离交货日期还有 {days_left} 天，还没到「提前 {remind} 天提醒」的范围，所以不标颜色。"
+        o["flag_reason"] = f"提前 {remind} 天提醒，距交货还剩 {days_left} 天，还没到提醒时间，所以不标颜色"
 
     # 实收数量和订单不一样时的说明文字
     o["diff_text"] = ""
@@ -222,7 +222,8 @@ def new_order():
     return redirect(url_for("index"))
 
 
-@app.route("/order/<int:order_id>")
+# 订单详情：/orders/2。<int:...> 只匹配数字，所以不会和上面的 /orders/new 冲突
+@app.route("/orders/<int:order_id>")
 def order_detail(order_id):
     with db.connect() as conn:
         o = decorate(get_order(conn, order_id))
@@ -230,7 +231,13 @@ def order_detail(order_id):
     return render_template("detail.html", o=o, logs=logs)
 
 
-@app.route("/order/<int:order_id>/rules", methods=["POST"])
+@app.route("/order/<int:order_id>")
+def old_order_url(order_id):
+    """旧网址 /order/2（单数）已经发出去过，永久跳转（301）到新网址 /orders/2，旧链接不会失效。"""
+    return redirect(url_for("order_detail", order_id=order_id), code=301)
+
+
+@app.route("/orders/<int:order_id>/rules", methods=["POST"])
 @owner_required("修改提醒规则")  # 后端检查：就算绕过页面上禁用的输入框直接提交，也会被挡住
 def update_rules(order_id):
     role = current_role()
@@ -253,7 +260,7 @@ def update_rules(order_id):
     return redirect(url_for("order_detail", order_id=order_id))
 
 
-@app.route("/order/<int:order_id>/receive", methods=["POST"])
+@app.route("/orders/<int:order_id>/receive", methods=["POST"])
 def receive(order_id):
     """确认收货：店主和店员都可以做。"""
     role = current_role()
@@ -300,7 +307,7 @@ RESOLUTIONS = {
 }
 
 
-@app.route("/order/<int:order_id>/resolve", methods=["POST"])
+@app.route("/orders/<int:order_id>/resolve", methods=["POST"])
 @owner_required("处理数量差异")
 def resolve(order_id):
     role = current_role()
@@ -346,8 +353,7 @@ def time_forward():
     - 过了交货日期 → 改成逾期；开了自动催货就写 auto_chase 日志（附催货消息），没开就写一条说明
     - 已经逾期的订单，开了自动催货的话每天再催一次，但同一天不重复催"""
     role = current_role()
-    db.set_offset(db.get_offset() + 1)
-    t = db.today()
+    t = db.advance_day()
     with db.connect() as conn:
         ff_log_id = db.add_log(conn, role, "time_forward", f"模拟日期推进到 {t.isoformat()}")
         rows = conn.execute("SELECT * FROM orders WHERE status IN (?, ?)",
@@ -385,8 +391,15 @@ def time_forward():
 @app.route("/reset", methods=["POST"])
 @owner_required("重置演示数据")  # 会清空所有订单和日志，只能店主做
 def reset():
-    db.reset_db()
-    flash("演示数据已重置", "ok")
+    """演示前一键恢复：清空数据库，重新载入 data/seed_orders.json，模拟日期回到 2026-10-21。"""
+    try:
+        count = db.reset_db(current_role())
+    except (OSError, ValueError) as e:
+        # seed_orders.json 不见了或写错了：现有数据没有被删，把问题告诉用户
+        flash(f"重置失败，现有数据没有改动。原因：{e}", "error")
+        return redirect(back_url())
+    session.pop("ff_log_id", None)  # 旧的快进摘要已经没有意义了
+    flash(f"演示数据已重置：载入 {count} 张订单，模拟日期回到 {db.DEMO_START.isoformat()}", "ok")
     return redirect(url_for("index"))
 
 

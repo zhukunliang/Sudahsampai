@@ -111,6 +111,7 @@ button, .btn {
 }
 .bar button { padding: 6px 10px; font-size: 14px; margin: 0; }
 button.secondary { background: #868e96; }
+button.danger { background: #c92a2a; }
 input:disabled { background: #eee; color: #888; }
 button:disabled { background: #ccc; color: #666; cursor: not-allowed; }
 .muted { color: #888; font-size: 14px; }

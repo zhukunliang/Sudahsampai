@@ -21,6 +21,16 @@ python src/app.py
 
 > 用 Reserved VM 而不是 Autoscale：SQLite 是一个本地文件，Autoscale 的实例会被回收，数据会丢。
 
+## 合成数据和重置
+
+- 合成订单在 `data/seed_orders.json`，队友可以直接编辑。必填字段：`product`、`quantity`（大于 0）、`delivery_date`（YYYY-MM-DD）。
+  其他字段可以省略：`status` 默认 `pending`，`remind_days_before` 默认 1，`auto_chase` 默认 `true`。
+  `status` 可选：`pending`、`overdue`、`delivered`、`discrepancy`、`restock_requested`、`negotiating`。
+  是否准时不用填，有 `received_at` 时会自动和 `delivery_date` 比较。
+- 日期都以 **2026-10-21** 为"今天"来写。
+- 演示前用店主身份点顶部的 **重置演示数据**：清空数据库、重新载入这个文件、模拟日期回到 2026-10-21。
+  如果 JSON 写错了，重置会失败并提示是第几张订单的问题，现有数据不会被删。
+
 ## 目录结构
 
 ```
@@ -28,7 +38,7 @@ src/app.py          Flask 入口和页面路由
 src/db.py           数据库操作
 src/templates/      HTML 模板
 src/static/         CSS
-data/               运行时生成的数据库文件；之后的合成数据 seed_orders.json 也放这里
+data/               合成数据 seed_orders.json；运行时生成的数据库 sdc.db 和模拟日期 sim_state.json（不提交）
 requirements.txt    Python 依赖
 .replit             Replit 运行和部署配置
 ```

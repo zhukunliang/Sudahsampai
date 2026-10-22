@@ -1,13 +1,13 @@
 {# 日志表格：/logs 页面和订单详情页底部共用这一份。用之前要先准备好 logs 变量 #}
 <table class="logs">
   <thead>
-    <tr><th>模拟日期</th><th>真实时间</th><th>角色</th><th>动作</th><th>订单</th><th>内容</th></tr>
+    <tr><th>模拟日期</th><th>真实时间（马来西亚）</th><th>角色</th><th>动作</th><th>订单</th><th>内容</th></tr>
   </thead>
   <tbody>
     {% for l in logs %}
     <tr>
       <td data-label="模拟日期">{{ l.sim_date }}</td>
-      <td data-label="真实时间">{{ l.timestamp }}</td>
+      <td data-label="真实时间（马来西亚）">{{ l.timestamp }}</td>
       <td data-label="角色">{{ l.role }}</td>
       <td data-label="动作"><span class="log-tag log-{{ l.color }}" title="{{ l.action }}">{{ l.tag }}</span></td>
       <td data-label="订单">

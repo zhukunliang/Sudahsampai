@@ -1,15 +1,22 @@
 import json
 import os
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 # 项目根目录 = src/ 的上一级；数据库等运行时文件都放在 data/ 里
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "sdc.db")
-# 模拟时间的偏移天数单独存文件，数据库保持只有 2 张表
+# 当前模拟日期单独存一个小文件，数据库保持只有 2 张表
 SIM_PATH = os.path.join(DATA_DIR, "sim_state.json")
+# 合成订单数据（队友可以直接编辑这个文件）
+SEED_PATH = os.path.join(DATA_DIR, "seed_orders.json")
+# 演示的起始日期：第一次启动和重置后，模拟日期都是这一天
+DEMO_START = date(2026, 10, 21)
+# 马来西亚时间（Asia/Kuala_Lumpur）。马来西亚没有夏令时，全年都是 UTC+8，
+# 所以直接写固定的 +8 小时，不需要额外安装时区数据库（Windows 上默认没有）
+MALAYSIA_TZ = timezone(timedelta(hours=8), "MYT")
 
 # 订单状态：数据库里存英文代码，页面上显示中文
 PENDING = "pending"                      # 待送达
@@ -48,6 +55,7 @@ ACTION_TAGS = {
     "negotiating": ("差异", "orange"),
     "permission_denied": ("权限拒绝", "purple"),
     "role_switched": ("角色切换", "gray-blue"),
+    "demo_reset": ("重置", "gray"),
 }
 OTHER_TAG = ("其他", "gray")
 
@@ -90,21 +98,24 @@ def connect():
 
 # ---------- 模拟时间 ----------
 
-def get_offset():
+def today():
+    """当前模拟日期。完全不看电脑的真实日期；文件不存在或读不懂时就是演示起始日。"""
     try:
         with open(SIM_PATH, encoding="utf-8") as f:
-            return int(json.load(f).get("offset_days", 0))
-    except (OSError, ValueError):
-        return 0
+            return date.fromisoformat(json.load(f)["sim_date"])
+    except (OSError, ValueError, KeyError):
+        return DEMO_START
 
 
-def set_offset(days):
+def set_today(d):
     with open(SIM_PATH, "w", encoding="utf-8") as f:
-        json.dump({"offset_days": days}, f)
+        json.dump({"sim_date": d.isoformat()}, f)
 
 
-def today():
-    return date.today() + timedelta(days=get_offset())
+def advance_day():
+    """模拟日期加 1 天，返回新的日期。"""
+    set_today(today() + timedelta(days=1))
+    return today()
 
 
 # ---------- 日志 ----------
@@ -114,7 +125,8 @@ def add_log(conn, role, action, detail, order_id=None):
     cur = conn.execute(
         """INSERT INTO logs (timestamp, sim_date, role, action, detail, order_id)
            VALUES (?, ?, ?, ?, ?, ?)""",
-        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), today().isoformat(),
+        # 不管服务器在哪个时区（Replit 是 UTC），都记成马来西亚时间
+        (datetime.now(MALAYSIA_TZ).strftime("%Y-%m-%d %H:%M:%S"), today().isoformat(),
          role, action, detail, order_id),
     )
     return cur.lastrowid
@@ -164,30 +176,42 @@ def get_events_after(conn, log_id):
 
 
 # ---------- 合成数据 ----------
+# data/seed_orders.json 里有 7 张虚构订单，日期以 2026-10-21 为"今天"，
+# 打开就有黄、红、橙、正常各种状态。
 
-def seed(conn):
-    """7 张虚构订单，日期相对于当前模拟日期，打开就有黄、红、橙、正常各种状态。"""
-    t = today()
-    d = lambda n: (t + timedelta(days=n)).isoformat()
-    rows = [
-        # 供应商, WhatsApp, 商品, 类别, 数量, 单位, 交货日期, 保质期, 提前提醒, 自动催货,
-        #   状态, 实收数量, 实收日期, 是否准时
-        ("Kedai Borong Ah Seng", "+60 12-000 1001", "大米 10kg", "主食", 20, "包", d(5), d(365), 2, 1,
-         PENDING, None, None, None),
-        ("Segar Sayur Sdn Bhd", "+60 12-000 1002", "青菜", "蔬菜", 15, "箱", d(1), d(6), 2, 1,
-         PENDING, None, None, None),
-        ("Mewah Minyak Trading", "+60 12-000 1003", "食用油 5L", "油和调料", 30, "桶", d(2), d(540), 3, 0,
-         PENDING, None, None, None),
-        ("Roti Pagi Bakery", "+60 12-000 1004", "白面包", "烘焙", 40, "条", d(-2), d(2), 1, 1,
-         OVERDUE, None, None, None),
-        ("Telur Emas Farm", "+60 12-000 1005", "鸡蛋", "蛋奶", 25, "盘", d(-1), d(20), 1, 0,
-         DELIVERED, 25, d(-1), 1),
-        # 交货日期前天，昨天才到，而且少了 4 瓶：迟到 + 数量差异，等店主处理
-        ("Susu Segar Dairy", "+60 12-000 1006", "鲜奶 1L", "蛋奶", 48, "瓶", d(-2), d(4), 1, 1,
-         DISCREPANCY, 44, d(-1), 0),
-        ("Gula Manis Supplies", "+60 12-000 1007", "白糖 1kg", "油和调料", 50, "包", d(9), None, 3, 0,
-         PENDING, None, None, None),
-    ]
+def load_seed_orders():
+    """读 data/seed_orders.json，检查每张订单，转换成可以直接插入数据库的元组。
+    文件有问题时抛出 ValueError，并说明是第几张订单的什么问题——这时还什么都没删。"""
+    with open(SEED_PATH, encoding="utf-8") as f:
+        items = json.load(f)  # JSON 格式写错时 json 会抛 ValueError，带行号
+    rows = []
+    for i, o in enumerate(items, start=1):
+        try:
+            delivery = date.fromisoformat(o["delivery_date"])
+            status = o.get("status", PENDING)
+            if status not in STATUS_LABELS:
+                raise ValueError(f"status 只能是 {', '.join(STATUS_LABELS)}")
+            if int(o["quantity"]) <= 0:
+                raise ValueError("quantity 必须大于 0")
+            received_at = o.get("received_at")
+            # 是否准时不用手填：有到货日期就和交货日期比较
+            on_time = None if not received_at else int(date.fromisoformat(received_at) <= delivery)
+            if o.get("expiry_date"):
+                date.fromisoformat(o["expiry_date"])
+            rows.append((
+                o.get("supplier", ""), o.get("whatsapp", ""), o["product"], o.get("category", ""),
+                int(o["quantity"]), o.get("unit", ""), delivery.isoformat(), o.get("expiry_date"),
+                int(o.get("remind_days_before", 1)), 1 if o.get("auto_chase", True) else 0,
+                status, o.get("received_quantity"), received_at, on_time,
+            ))
+        except KeyError as e:
+            raise ValueError(f"seed_orders.json 第 {i} 张订单缺少字段 {e}")
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"seed_orders.json 第 {i} 张订单有问题：{e}")
+    return rows
+
+
+def insert_orders(conn, rows):
     conn.executemany(
         """INSERT INTO orders (supplier, whatsapp, product, category, quantity, unit,
                delivery_date, expiry_date, remind_days_before, auto_chase, status,
@@ -195,7 +219,6 @@ def seed(conn):
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         rows,
     )
-    add_log(conn, "系统", "seeded", f"写入 {len(rows)} 张合成订单")
 
 
 def init_db():
@@ -208,14 +231,23 @@ def init_db():
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.executescript(SCHEMA)
         if conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0:
-            seed(conn)
+            # 第一次启动（或数据库丢了）：从 JSON 载入合成数据，日期从演示起始日开始
+            rows = load_seed_orders()
+            set_today(DEMO_START)
+            insert_orders(conn, rows)
+            add_log(conn, "系统", "seeded", f"首次启动，载入 {len(rows)} 张合成订单")
 
 
-def reset_db():
-    """清空并重新生成合成数据，模拟时间归零。"""
-    set_offset(0)
+def reset_db(role):
+    """重置演示数据：清空订单和日志，重新载入 seed_orders.json，模拟日期回到演示起始日。
+    返回载入的订单数。JSON 有问题时抛 ValueError，现有数据保持不动。"""
+    rows = load_seed_orders()  # 先读、先检查，没问题再删
+    set_today(DEMO_START)
     with connect() as conn:
         conn.execute("DELETE FROM orders")
         conn.execute("DELETE FROM logs")
-        conn.execute("DELETE FROM sqlite_sequence")
-        seed(conn)
+        conn.execute("DELETE FROM sqlite_sequence")  # 让订单编号重新从 #1 开始
+        insert_orders(conn, rows)
+        add_log(conn, role, "demo_reset",
+                f"演示数据已重置：载入 {len(rows)} 张订单，模拟日期回到 {DEMO_START.isoformat()}")
+    return len(rows)
