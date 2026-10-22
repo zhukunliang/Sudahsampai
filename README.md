@@ -42,3 +42,9 @@ data/               合成数据 seed_orders.json；运行时生成的数据库 
 requirements.txt    Python 依赖
 .replit             Replit 运行和部署配置
 ```
+
+## License
+
+Copyright 2026 Team Sudahsampai
+
+本项目采用 [Apache License 2.0](LICENSE) 授权，完整条款见根目录的 `LICENSE` 文件。
