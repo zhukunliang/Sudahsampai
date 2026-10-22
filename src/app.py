@@ -1,3 +1,4 @@
+import json
 import os
 import secrets
 from datetime import date
@@ -6,6 +7,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 
+import ai_parser  # 读懂供应商回复（AI，失败时自动换规则模式）
 import db
 import orbyte_adapter as orbyte  # 用户、联系人、发消息、待办、点数、审计日志都走这一层
 
@@ -230,9 +232,128 @@ def new_order():
 @app.route("/orders/<int:order_id>")
 def order_detail(order_id):
     with db.connect() as conn:
-        o = decorate(get_order(conn, order_id))
-        logs = db.get_logs(conn, order_id)  # 页面底部显示这张订单自己的日志
-    return render_template("detail.html", o=o, logs=logs)
+        return render_detail(conn, get_order(conn, order_id))
+
+
+def render_detail(conn, order_row, analysis=None, reply_text="", status=200):
+    """渲染订单详情页。analysis 是刚做完的 AI 分析结果（没有就不显示）。"""
+    logs = db.get_logs(conn, order_row["id"])  # 页面底部显示这张订单自己的日志
+    return render_template("detail.html", o=decorate(order_row), logs=logs, analysis=analysis,
+                           reply_text=reply_text, samples=load_sample_replies()), status
+
+
+def load_sample_replies():
+    """data/sample_replies.json 里的供应商回复样例，给演示用。文件有问题就不显示样例。"""
+    try:
+        with open(os.path.join(db.DATA_DIR, "sample_replies.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
+# ---------- 读懂供应商回复（AI） ----------
+
+def suggest(o, result):
+    """根据解析结果给出建议（确定性规则，不是 AI）。返回 (建议列表, 确认后会做的修改说明或 None)。"""
+    tips, change = [], None
+    intent = result["intent"]
+    if o["status"] not in db.AWAITING:
+        return [f"这张订单已经是「{db.STATUS_LABELS[o['status']]}」，不再根据回复修改。"], None
+
+    if intent == "delay" and result["new_delivery_date"]:
+        old = date.fromisoformat(o["delivery_date"])
+        new = date.fromisoformat(result["new_delivery_date"])
+        days = (new - old).days
+        if days > 0:
+            tips.append(f"新交货日期比原定晚 {days} 天（{o['delivery_date']} → {new.isoformat()}）。"
+                        f"系统没有库存数据，请确认现有 {o['product']} 能撑到那天，否则可能缺货。")
+        elif days < 0:
+            tips.append(f"新交货日期比原定早 {-days} 天（{o['delivery_date']} → {new.isoformat()}）。")
+        else:
+            tips.append("新交货日期和原定一样。")
+        if new < db.today():
+            tips.append("⚠ 这个日期已经过去了，可能解析错了，请核对原文。")
+        change = f"交货日期 {o['delivery_date']} → {new.isoformat()}"
+    elif intent == "partial" and result["quantity"] is not None:
+        short = o["quantity"] - result["quantity"]
+        if short > 0:
+            tips.append(f"供应商这次只能送 {result['quantity']} {o['unit']}，比订单少 {short} {o['unit']}。"
+                        f"剩下的需要另外下单或跟进。")
+        else:
+            tips.append(f"供应商说送 {result['quantity']} {o['unit']}，不少于订单数量 {o['quantity']}。")
+        change = f"订购数量 {o['quantity']} → {result['quantity']} {o['unit']}"
+    elif intent == "price_change" and result["unit_price"] is not None:
+        tips.append(f"供应商说单价改为 RM {result['unit_price']:g}。系统目前不保存单价，"
+                    f"确认后只记录在日志里，请自行核对成本。")
+        change = f"记录新单价 RM {result['unit_price']:g}（不修改订单字段）"
+    elif intent == "confirm":
+        tips.append(f"供应商确认会按原定 {o['delivery_date']} 送货。")
+        change = "记录供应商已确认（不修改订单字段）"
+    return tips, change
+
+
+@app.route("/orders/<int:order_id>/reply", methods=["POST"])
+def analyze_reply(order_id):
+    """粘贴供应商回复 → AI 分析。任何角色都可以；只分析、写日志，不修改订单。"""
+    reply_text = request.form.get("reply_text", "").strip()
+    with db.connect() as conn:
+        o = get_order(conn, order_id)
+        parsed = ai_parser.parse_reply(reply_text, o, db.today())
+        tips, change = suggest(o, parsed["result"])
+        parsed.update(tips=tips, change=change, can_apply=bool(change) and not parsed["needs_review"])
+        r = parsed["result"]
+        orbyte.write_audit(conn, "reply_analyzed",
+                           f"#{order_id} {parsed['mode_note']} 解析供应商回复「{reply_text[:200]}」→ "
+                           f"intent={r['intent']}, confidence={r['confidence']:.2f}"
+                           f"{'，需要人工确认' if parsed['needs_review'] else ''}", order_id)
+        return render_detail(conn, o, analysis=parsed, reply_text=reply_text)
+
+
+@app.route("/orders/<int:order_id>/reply/apply", methods=["POST"])
+@owner_required("确认更新订单（根据供应商回复）")
+def apply_reply(order_id):
+    """店主确认后才真正修改订单。表单把页面上显示的解析结果带回来，后端再校验一次。"""
+    form = request.form
+    raw = {
+        "intent": form.get("intent"),
+        "new_delivery_date": form.get("new_delivery_date") or None,
+        "quantity": int(form["quantity"]) if form.get("quantity", "").isdigit() else None,
+        "unit_price": _to_float(form.get("unit_price")),
+        "confidence": _to_float(form.get("confidence")),
+        "summary_en": form.get("summary_en", ""),
+    }
+    result, problems = ai_parser.validate(raw)
+    reply_text = form.get("reply_text", "")
+    with db.connect() as conn:
+        o = get_order(conn, order_id)
+        tips, change = suggest(o, result)
+        if problems or result["confidence"] < ai_parser.CONFIDENCE_THRESHOLD or not change:
+            flash("这条解析结果需要人工确认，订单没有修改。", "error")
+            return redirect(url_for("order_detail", order_id=order_id))
+
+        if result["intent"] == "delay":
+            # 改了交货日期：如果之前已经逾期、而新日期还没到，就回到"待送达"
+            new_status = db.PENDING if result["new_delivery_date"] >= db.today().isoformat() else o["status"]
+            conn.execute("UPDATE orders SET delivery_date = ?, status = ? WHERE id = ?",
+                         (result["new_delivery_date"], new_status, order_id))
+        elif result["intent"] == "partial":
+            conn.execute("UPDATE orders SET quantity = ? WHERE id = ?", (result["quantity"], order_id))
+        # price_change / confirm：不改订单字段，只写日志
+
+        user = orbyte.get_current_user()
+        orbyte.write_audit(conn, "reply_applied",
+                           f"#{order_id} 店主 {user['name']} 确认更新：{change}。"
+                           f"原文：「{reply_text[:200]}」。解析结果：{json.dumps(result, ensure_ascii=False)}",
+                           order_id)
+    flash(f"已更新订单：{change}", "ok")
+    return redirect(url_for("order_detail", order_id=order_id))
+
+
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @app.route("/order/<int:order_id>")

@@ -88,6 +88,19 @@ tr.diff td { background: #ffd8a8; }
 .log-purple { background: #e5dbff; color: #5f3dc4; }
 .log-gray-blue { background: #dee2e6; color: #364fc7; }
 .log-gray { background: #f1f3f5; color: #666; }
+.log-teal { background: #c3fae8; color: #087f5b; }
+
+/* 供应商回复分析 */
+textarea, select { width: 100%; padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; font-family: inherit; }
+.analysis h3 { font-size: 15px; margin: 8px 0 4px; }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.compare dl { display: grid; grid-template-columns: 6em 1fr; gap: 2px 8px; margin: 0; }
+.mode { display: inline-block; padding: 2px 10px; border-radius: 10px; font-size: 13px; margin-right: 6px; }
+.mode-ai { background: #d0ebff; color: #1864ab; }
+.mode-rules { background: #fff3bf; color: #8a6d00; }
+.mode-review { background: #ffd6d6; color: #c92a2a; font-weight: bold; }
+.problems { color: #c92a2a; font-size: 14px; margin: 4px 0; }
+@media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
 table.logs { font-size: 14px; }
 /* 日志内容和催货消息里的换行要显示出来 */
 table.logs td[data-label="内容"], .message { white-space: pre-line; }

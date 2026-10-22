@@ -60,6 +60,8 @@ ACTION_TAGS = {
     "demo_reset": ("重置", "gray"),
     "approval_created": ("Orbyte 待办", "orange"),
     "credit_charged": ("扣点", "gray-blue"),
+    "reply_analyzed": ("AI 分析", "teal"),
+    "reply_applied": ("确认更新", "teal"),
 }
 OTHER_TAG = ("其他", "gray")
 

@@ -1,0 +1,27 @@
+[
+  {
+    "label": "延期 delay",
+    "expected_intent": "delay",
+    "text": "Bos, sorry ya 青菜 hari ni tak dapat hantar, lori rosak. Jumaat baru sampai, ok?"
+  },
+  {
+    "label": "少货 partial",
+    "expected_intent": "partial",
+    "text": "Hi boss, stok tak cukup, only 13 kotak boleh hantar esok, 剩下的 next week ya"
+  },
+  {
+    "label": "涨价 price change",
+    "expected_intent": "price_change",
+    "text": "Boss, harga minyak naik lah, 每桶 RM 58 mulai minggu ni, ok tak?"
+  },
+  {
+    "label": "确认 confirm",
+    "expected_intent": "confirm",
+    "text": "Ok boss, 明天 sampai on time, no problem"
+  },
+  {
+    "label": "看不懂 unclear",
+    "expected_intent": "unclear",
+    "text": "Boss tu macam mana ya... 我问一下 my brother dulu baru reply you"
+  }
+]
