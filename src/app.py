@@ -351,19 +351,20 @@ def time_forward():
     """模拟日期加 1 天，然后检查还没到货的订单：
     - 待送达、进入提醒范围 → 写 reminder 日志
     - 过了交货日期 → 改成逾期；开了自动催货就写 auto_chase 日志（附催货消息），没开就写一条说明
-    - 已经逾期的订单，开了自动催货的话每天再催一次，但同一天不重复催"""
+    - 已经逾期的订单，开了自动催货的话每天再催一次
+    - 同一张订单同一天不重复提醒、不重复催（先用 has_log 查当天有没有写过）"""
     role = current_role()
     t = db.advance_day()
     with db.connect() as conn:
-        ff_log_id = db.add_log(conn, role, "time_forward", f"模拟日期推进到 {t.isoformat()}")
+        ff_log_id = db.add_log(conn, role, "time_forward", f"模拟日期 → {t.isoformat()}")
         rows = conn.execute("SELECT * FROM orders WHERE status IN (?, ?)",
                             (db.PENDING, db.OVERDUE)).fetchall()
         for o in rows:
             days_left = (date.fromisoformat(o["delivery_date"]) - t).days
 
             if days_left >= 0:
-                # 还没到交货日期：进入提醒范围才提醒
-                if days_left <= o["remind_days_before"]:
+                # 还没到交货日期：进入提醒范围才提醒；同一天已经提醒过就跳过
+                if days_left <= o["remind_days_before"] and not db.has_log(conn, o["id"], "reminder", t.isoformat()):
                     db.add_log(conn, "系统", "reminder",
                                f"提醒店主：#{o['id']} {o['product']}预计 {o['delivery_date'][5:]} 送达", o["id"])
                 continue
@@ -381,7 +382,7 @@ def time_forward():
                                o["id"])
             elif newly_overdue:
                 db.add_log(conn, "系统", "overdue",
-                           f"#{o['id']} {o['product']} 已逾期，按店主设置未自动催货", o["id"])
+                           f"#{o['id']} {o['product']} 已逾期，按店主设置不自动催货", o["id"])
 
     # 记住这次快进的日志编号，首页据此显示"这次快进触发了哪些事件"
     session["ff_log_id"] = ff_log_id
