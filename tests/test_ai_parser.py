@@ -321,6 +321,67 @@ class CallOptionsTest(unittest.TestCase):
         sent, _ = self.call_with_env({"AI_MAX_TOKENS": "lots"})
         self.assertEqual(sent["max_tokens"], 400)
 
+    def test_message_has_only_the_needed_order_details(self):
+        sent, _ = self.call_with_env({})
+        message = sent["messages"][1]["content"]
+        for needed in ("青菜", "15 箱", "2026-10-22", "2026-10-21", "ok boss"):
+            self.assertIn(needed, message)
+        for private in ("Segar Sayur", "#2"):  # 供应商名字、订单编号都不发
+            self.assertNotIn(private, message)
+
+
+class RedactTest(unittest.TestCase):
+    """发给境外 AI 之前的脱敏：个人信息换成 [REDACTED]，解析需要的内容不能动。"""
+
+    def test_phone_numbers(self):
+        for phone in ("012-345 6789", "0123456789", "03-1234 5678", "+60 12-000 1001", "+6012-3456789",
+                      "+65 9123 4567"):
+            with self.subTest(phone=phone):
+                self.assertEqual(ai_parser.redact(f"call me {phone} ya"), "call me [REDACTED] ya")
+
+    def test_email(self):
+        self.assertEqual(ai_parser.redact("email ali.bin@segar-sayur.com.my ok"), "email [REDACTED] ok")
+
+    def test_titles_with_names(self):
+        cases = {
+            "Encik Ali cakap Jumaat baru sampai": "[REDACTED] cakap Jumaat baru sampai",
+            "boss, Mr Tan said ok": "boss, [REDACTED] said ok",
+            "Tanya puan Siti Aminah dulu": "Tanya [REDACTED] dulu",
+            "Encik Ali Jumaat baru sampai": "[REDACTED] Jumaat baru sampai",  # 星期五不能被当成名字
+            "Dr. Lim confirm": "[REDACTED] confirm",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(ai_parser.redact(text), expected)
+
+    def test_known_supplier_name(self):
+        text = "Segar Sayur here, only 12 kotak"
+        self.assertEqual(ai_parser.redact(text, known_names=("Segar Sayur",)), "[REDACTED] here, only 12 kotak")
+
+    def test_useful_details_are_kept(self):
+        for text in [s["text"] for s in SAMPLES] + ["Boss sorry ya, lori rosak. Jumaat baru boleh hantar, 12 kotak je",
+                                                    "harga RM 58.50 mulai 2026-10-23", "only 13 kotak, 25/10 sampai"]:
+            with self.subTest(text=text):
+                self.assertEqual(ai_parser.redact(text, known_names=("Segar Sayur Sdn Bhd",)), text)
+
+    def test_ai_gets_redacted_text_and_result_says_so(self):
+        seen = {}
+
+        def fake(text, order, today):
+            seen["text"] = text
+            return dict(ValidationTest.GOOD)
+        with mock.patch.dict(os.environ, FAKE_AI_ENV), mock.patch.object(ai_parser, "_call_model", fake):
+            parsed = ai_parser.parse_reply("Encik Ali: Jumaat baru sampai, call 012-345 6789", ORDER, TODAY)
+        self.assertEqual(seen["text"], "[REDACTED]: Jumaat baru sampai, call [REDACTED]")
+        self.assertTrue(parsed["sent_redacted"])
+        self.assertEqual(parsed["redacted_count"], 2)
+
+    def test_rule_mode_sends_nothing(self):
+        with without_api_key():
+            parsed = ai_parser.parse_reply("Encik Ali: Jumaat baru sampai", ORDER, TODAY)
+        self.assertFalse(parsed["sent_redacted"])
+        self.assertEqual(parsed["result"]["new_delivery_date"], "2026-10-23")  # 规则模式本地用原文
+
 
 if __name__ == "__main__":
     unittest.main()

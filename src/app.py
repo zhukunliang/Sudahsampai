@@ -450,7 +450,9 @@ def analyze_reply(order_id):
                            f"{' (' + parsed['mode_reason'] + ')' if parsed['mode_reason'] else ''} "
                            f"read supplier reply \"{reply_text[:200]}\" → "
                            f"intent={r['intent']}, confidence={r['confidence']:.2f}"
-                           f"{', needs human check' if parsed['needs_review'] else ''}", order_id)
+                           f"{', needs human check' if parsed['needs_review'] else ''}"
+                           f"{'; sent to AI redacted (' + str(parsed['redacted_count']) + ' item(s) hidden)' if parsed['sent_redacted'] else ''}",
+                           order_id)
         return render_detail(conn, o, analysis=parsed, reply_text=reply_text)
 
 

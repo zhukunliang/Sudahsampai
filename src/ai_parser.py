@@ -18,6 +18,12 @@
 
 三个变量没设齐、请求超过 15 秒或出错时，自动换成下面的规则解析器（关键词 + 正则），
 页面上标注"规则模式"，Demo 不会因为 API 出问题而中断。
+
+隐私（数据脱敏）：AI 服务的服务器在马来西亚境外，所以发出去之前先脱敏。
+- 只发：回复原文（脱敏后）、商品名、订购数量和单位、原定交货日期、模拟日期；
+- 不发：供应商名字、电话、订单编号；
+- 回复原文里的电话号码、邮箱、带称呼的人名（"Encik Ali"、"Mr Tan"）和供应商名字，
+  由 redact() 换成 [REDACTED]。规则模式在本地运行，用的是原文。
 """
 import json
 import os
@@ -88,17 +94,20 @@ def parse_reply(text, order, today):
         return _package(_unclear("The reply is too long to analyse."), "rules", "reply too long",
                         [f"回复超过 {MAX_REPLY_LENGTH} 个字"])
 
+    redacted_count = None  # None = 没有发给 AI；数字 = 已脱敏后发送，隐藏了几处
     if not all(os.environ.get(name) for name in AI_ENV_VARS):
         result, mode, reason = rule_parse(text, order, today), "rules", "AI not configured"
     else:
+        safe_text = redact(text, known_names=(order["supplier"],))
+        redacted_count = safe_text.count(REDACTED) - text.count(REDACTED)
         try:
-            result, mode, reason = _call_model(text, order, today), "ai", ""
+            result, mode, reason = _call_model(safe_text, order, today), "ai", ""
         except Exception as e:  # 超时、网络、密钥、格式不对……任何问题都换成规则模式，Demo 不中断
-            result, mode = rule_parse(text, order, today), "rules"
+            result, mode = rule_parse(text, order, today), "rules"  # 规则模式在本地，用原文
             reason = "AI timed out" if "Timeout" in type(e).__name__ else f"AI error ({type(e).__name__})"
 
     clean, problems = validate(result)
-    return _package(clean, mode, reason, problems)
+    return _package(clean, mode, reason, problems, redacted_count)
 
 
 def provider_name():
@@ -119,7 +128,7 @@ def ai_label():
     return f"AI: {model} ({provider})" if provider else f"AI: {model}"
 
 
-def _package(result, mode, reason, problems):
+def _package(result, mode, reason, problems, redacted_count=None):
     needs_review = bool(problems) or result["confidence"] < CONFIDENCE_THRESHOLD or result["intent"] == "unclear"
     if result["confidence"] < CONFIDENCE_THRESHOLD and not problems:
         problems = [f"把握度 {result['confidence']:.2f} 低于 {CONFIDENCE_THRESHOLD}"]
@@ -127,7 +136,51 @@ def _package(result, mode, reason, problems):
         problems = problems + ["看不懂供应商的意思"]
     note = ai_label() if mode == "ai" else "Offline rules (AI unavailable)"
     return {"result": result, "mode": mode, "mode_note": note, "mode_reason": reason,
-            "needs_review": needs_review, "problems": problems}
+            "needs_review": needs_review, "problems": problems,
+            "sent_redacted": redacted_count is not None, "redacted_count": redacted_count or 0}
+
+
+# ---------- 数据脱敏：发给境外 AI 之前，把可能是个人信息的内容换掉 ----------
+
+REDACTED = "[REDACTED]"
+
+# 马来西亚电话：012-345 6789 / 0123456789 / 03-1234 5678 / +60 12-000 1001，以及其他带 + 国家码的号码。
+# 日期（2026-10-23）不以 0 或 + 开头，数量（13 kotak）太短，都不会被误换。
+PHONE_PATTERN = re.compile(r"(?<![\w+])(?:(?:\+?60|0)[\s-]?\d{1,2}[\s-]?\d{3,4}[\s-]?\d{3,4}"
+                           r"|\+\d{1,3}[\s-]?\d[\d\s-]{6,}\d)(?!\w)")
+EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# 称呼 + 大写开头的名字（最多三个词）："Encik Ali"、"Mr Tan Ah Kow"、"Puan Siti"。称呼本身不分大小写。
+TITLE_PATTERN = re.compile(r"\b(?i:encik|en\.|cik|puan|pn\.|tuan|datuk|dato'?|dr\.?|mr\.?|mrs\.?|ms\.?|miss|"
+                           r"madam|mdm\.?|uncle|auntie|aunty|abang|kak)\s+[A-Z][A-Za-z'-]*(?:\s+[A-Z][A-Za-z'-]*){0,2}")
+# 这些大写开头的词常常紧跟在名字后面，但不是名字，不能一起换掉（否则会丢掉"星期五"这类关键信息）
+NOT_NAMES = {"ok", "okay", "boss", "bos", "sorry", "thanks", "today", "tomorrow", "esok", "lusa", "hari",
+             "isnin", "selasa", "rabu", "khamis", "jumaat", "jumat", "sabtu", "ahad",
+             "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+
+
+def redact(text, known_names=()):
+    """把回复原文里的电话号码、邮箱、带称呼的人名，以及 known_names（例如供应商名字）换成 [REDACTED]。
+    日期、数量、价格、商品等解析需要的内容原样保留。"""
+    text = EMAIL_PATTERN.sub(REDACTED, text)  # 先换邮箱，免得邮箱里的数字被当成电话
+    text = PHONE_PATTERN.sub(REDACTED, text)
+    text = TITLE_PATTERN.sub(_redact_title, text)
+    for name in known_names:
+        if name and name.strip():
+            text = re.sub(re.escape(name.strip()), REDACTED, text, flags=re.IGNORECASE)
+    return text
+
+
+def _redact_title(match):
+    """"Encik Ali Jumaat baru sampai" → "[REDACTED] Jumaat baru sampai"：遇到不是名字的词就停下。"""
+    words = match.group().split()
+    names = []
+    for word in words[1:]:
+        if word.lower() in NOT_NAMES:
+            break
+        names.append(word)
+    if not names:
+        return match.group()  # 称呼后面紧跟的不是名字（例如 "Uncle Sorry"），不改
+    return " ".join([REDACTED] + words[1 + len(names):])
 
 
 # ---------- AI 模式 ----------
@@ -144,11 +197,12 @@ def _call_model(text, order, today):
         timeout=REQUEST_TIMEOUT_SECONDS,
         max_retries=0,  # 超时就直接换规则模式，不让用户多等
     )
+    # 只发解析需要的信息，不发供应商名字、电话、订单编号；text 已经由 redact() 脱敏
     user_message = (
         f"Today (simulated date): {today.isoformat()} ({today.strftime('%A')})\n"
-        f"Order: #{order['id']} {order['product']}, {order['quantity']} {order['unit']}, "
-        f"planned delivery {order['delivery_date']}, supplier {order['supplier']}\n\n"
-        f"Supplier reply:\n{text}"
+        f"Order: {order['product']}, {order['quantity']} {order['unit']}, "
+        f"planned delivery {order['delivery_date']}\n\n"
+        f"Supplier reply (personal details replaced by {REDACTED}):\n{text}"
     )
     options = {"max_tokens": max_tokens_setting()}  # 每次都传
     effort = os.environ.get("AI_REASONING_EFFORT", "").strip()
