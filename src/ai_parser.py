@@ -189,14 +189,9 @@ def _call_model(text, order, today):
     """通过 OpenAI 兼容接口调用模型，要求按 SCHEMA 返回 JSON。出任何问题都抛异常，由 parse_reply 兜底。
     先用 json_schema（格式最严格）；服务不支持时（例如 DeepSeek）自动改用 json_object，
     字段对不对交给 validate() 检查。"""
-    from openai import BadRequestError, OpenAI  # 放在这里导入：没装这个包时，规则模式照样能用
+    from openai import BadRequestError  # 放在这里导入：没装这个包时，规则模式照样能用
 
-    client = OpenAI(
-        base_url=os.environ["AI_BASE_URL"],
-        api_key=os.environ["AI_API_KEY"],
-        timeout=REQUEST_TIMEOUT_SECONDS,
-        max_retries=0,  # 超时就直接换规则模式，不让用户多等
-    )
+    client = _client()
     # 只发解析需要的信息，不发供应商名字、电话、订单编号；text 已经由 redact() 脱敏
     user_message = (
         f"Today (simulated date): {today.isoformat()} ({today.strftime('%A')})\n"
@@ -239,6 +234,13 @@ def _call_model(text, order, today):
     return extract_json(choice.message.content)
 
 
+def _client():
+    """OpenAI 兼容客户端。地址和密钥来自环境变量；超时就直接抛异常，由调用方换成规则 / 模板，不让用户多等。"""
+    from openai import OpenAI
+    return OpenAI(base_url=os.environ["AI_BASE_URL"], api_key=os.environ["AI_API_KEY"],
+                  timeout=REQUEST_TIMEOUT_SECONDS, max_retries=0)
+
+
 def max_tokens_setting():
     """AI_MAX_TOKENS 环境变量；没设置或不是正整数时用默认的 400。"""
     value = os.environ.get("AI_MAX_TOKENS", "").strip()
@@ -267,6 +269,88 @@ def extract_json(content):
         if isinstance(value, dict):
             return value
     return None
+
+
+# ---------- 给供应商的回复草稿（英文 + 马来文） ----------
+# 草稿只是建议：页面上可以改，店员或店主点"发送"才会发出去。
+# 草稿不会替店主答应涨价或少货，只说"店主会确认"，关键决定还是由人做。
+
+DRAFT_PROMPT = """You write short, polite WhatsApp replies from a small shop in Malaysia to its supplier.
+You are given the order, what the supplier said (personal details replaced by [REDACTED]) and how the shop's
+system understood it. Write the reply in English and in Malay (Bahasa Melayu), 1-3 short sentences each.
+- confirm: thank them and repeat the delivery date.
+- delay: thank them and ask them to confirm the new date (or ask for a date if none was given).
+- partial: thank them and ask when the remaining quantity can be sent.
+- price_change: thank them and say the owner will check the new price and reply. Do NOT accept the price.
+- unclear: politely ask them to confirm the delivery date and quantity.
+Never accept a price change or a smaller quantity on the shop's behalf. Do not invent names or numbers.
+Reply with one JSON object only: {"en": "...", "ms": "..."}"""
+
+MAX_DRAFT_LENGTH = 500  # 每种语言最多这么多字，太长的不像 WhatsApp 回复
+
+
+def draft_reply(text, result, order, today):
+    """根据解析结果写一条给供应商的回复草稿（英文 + 马来文）。
+    有 AI 时让 AI 写（发出去的内容同样先用 redact() 脱敏）；没有 AI、超时、出错或写得不合格时用模板。
+    返回 {"text": 草稿, "mode": "ai"|"template", "note": 页面上显示的来源}。"""
+    if all(os.environ.get(name) for name in AI_ENV_VARS):
+        safe_text = redact(text or "", known_names=(order["supplier"],))
+        try:
+            draft = _call_draft_model(safe_text, result, order, today)
+            en, ms = draft.get("en"), draft.get("ms")
+            if all(isinstance(v, str) and 0 < len(v.strip()) <= MAX_DRAFT_LENGTH for v in (en, ms)):
+                return {"text": f"{en.strip()}\n\n{ms.strip()}", "mode": "ai", "note": ai_label()}
+        except Exception:  # 和解析一样：任何问题都换成模板，页面不中断
+            pass
+    return {"text": template_reply(result, order), "mode": "template", "note": "Template"}
+
+
+def _call_draft_model(safe_text, result, order, today):
+    """让模型写草稿。只发写回复需要的信息：商品、数量、日期、解析结果和脱敏后的回复，不发供应商名字和电话。"""
+    facts = {k: result[k] for k in ("intent", "new_delivery_date", "quantity", "unit_price")}
+    user_message = (
+        f"Today (simulated date): {today.isoformat()}\n"
+        f"Order: {order['product']}, {order['quantity']} {order['unit']}, planned delivery {order['delivery_date']}\n"
+        f"Understood as: {json.dumps(facts)}\n\n"
+        f"Supplier said (personal details replaced by {REDACTED}):\n{safe_text}"
+    )
+    response = _client().chat.completions.create(
+        model=os.environ["AI_MODEL"],
+        messages=[{"role": "system", "content": DRAFT_PROMPT}, {"role": "user", "content": user_message}],
+        response_format={"type": "json_object"},
+        temperature=0.3,  # 稍微自然一点，但不要太随意
+        max_tokens=max_tokens_setting(),
+    )
+    return extract_json(response.choices[0].message.content) or {}
+
+
+def template_reply(result, order):
+    """没有 AI 时的模板草稿。只用订单和解析结果里已有的数字，不编造。"""
+    product, unit = order["product"], order["unit"] or "units"
+    intent, new_date, qty = result["intent"], result["new_delivery_date"], result["quantity"]
+    if intent == "confirm":
+        en = f"Thank you, noted. We will expect the {product} on {order['delivery_date']}."
+        ms = f"Terima kasih, baik. Kami tunggu {product} pada {order['delivery_date']}."
+    elif intent == "delay" and new_date:
+        en = f"Noted, thanks for letting us know. Please confirm the {product} will arrive on {new_date}."
+        ms = f"Baik, terima kasih kerana maklumkan. Tolong sahkan {product} akan sampai pada {new_date}."
+    elif intent == "delay":
+        en = f"Noted, thanks for letting us know. When can you deliver the {product}?"
+        ms = f"Baik, terima kasih kerana maklumkan. Bila boleh hantar {product}?"
+    elif intent == "partial" and qty is not None and qty < order["quantity"]:
+        rest = order["quantity"] - qty
+        en = (f"Thanks. Noted that you can send {qty} {unit} first. "
+              f"When can you send the remaining {rest} {unit}?")
+        ms = f"Terima kasih. Baik, boleh hantar {qty} {unit} dulu. Bila boleh hantar baki {rest} {unit}?"
+    elif intent == "price_change":
+        price = f" of RM {result['unit_price']:.2f}" if result["unit_price"] is not None else ""
+        harga = f" RM {result['unit_price']:.2f}" if result["unit_price"] is not None else ""
+        en = f"Thanks for the update. The owner will check the new price{price} and get back to you."
+        ms = f"Terima kasih atas makluman. Tauke akan semak harga baru{harga} dan maklumkan semula."
+    else:
+        en = f"Sorry, could you please confirm the delivery date and quantity for the {product} order?"
+        ms = f"Maaf, boleh sahkan tarikh hantar dan kuantiti untuk pesanan {product}?"
+    return f"{en}\n\n{ms}"
 
 
 # ---------- 后端校验（AI 和规则的结果都要过这一关） ----------

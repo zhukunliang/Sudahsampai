@@ -37,7 +37,8 @@
         <dt>{{ t('field.delivery') }}</dt><dd>{{ o.delivery_date }}{% if o.due %} · {{ m.due_text(o) }}{% endif %}</dd>
         <dt>{{ t('field.expiry') }}</dt><dd>{{ o.expiry_date or t('value.none') }}</dd>
         <dt>{{ t('field.rules') }}</dt>
-        <dd>{{ t('rules.summary', n=o.remind_days_before, state=t('state.on') if o.auto_chase else t('state.off')) }}</dd>
+        <dd>{{ t('rules.summary', n=o.remind_days_before, state=t('state.on') if o.auto_chase else t('state.off')) }}
+          · {{ t('rules.auto_apply_summary', state=t('state.on') if o.auto_apply else t('state.off')) }}</dd>
         {% if o.received_at %}
         <dt>{{ t('field.received_qty') }}</dt><dd>{{ o.received_quantity }} {{ o.unit }}{% if o.diff %} · {{ diff_label(o.diff) }}{% endif %}</dd>
         <dt>{{ t('field.received_at') }}</dt><dd>{{ o.received_at }}</dd>
@@ -73,6 +74,12 @@
                  {% if not is_owner %}disabled{% endif %}>
           {{ t('rules.auto') }}
         </label>
+        <label class="check">
+          <input type="checkbox" name="auto_apply" value="1" {% if o.auto_apply %}checked{% endif %}
+                 {% if not is_owner %}disabled{% endif %}>
+          {{ t('rules.auto_apply') }}
+        </label>
+        <p class="muted small">{{ t('rules.auto_apply_hint') }}</p>
         <button type="submit" class="btn btn-secondary" {% if not is_owner %}disabled{% endif %}>{{ t('rules.save') }}</button>
       </form>
     </details>
@@ -81,6 +88,21 @@
   {# ---------- 右栏：下一步该做什么（只显示当前需要的操作） ---------- #}
   <aside class="detail-side" id="next">
     <h2 class="side-title">{{ t('next.title') }}</h2>
+
+    {# 按店主的规则自动应用过的更新：说明改了什么，店主可以撤销 #}
+    {% if o.undo %}
+    <section class="card action-card auto-card">
+      <h3><i data-lucide="wand-sparkles"></i> {{ t('auto.title') }}</h3>
+      <p>{% for key, params in o.undo.changes %}{{ t(key, **params) }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+      <p class="muted small">{{ t('auto.why', c="%.2f" % o.undo.confidence) }}</p>
+      <form method="post" action="{{ url_for('undo_auto', order_id=o.id) }}" class="stack">
+        {% if not is_owner %}<p class="muted small"><i data-lucide="lock"></i> {{ t('auto.owner_only') }}</p>{% endif %}
+        <button type="submit" class="btn btn-secondary btn-block" {% if not is_owner %}disabled{% endif %}>
+          <i data-lucide="undo-2"></i> {{ t('auto.undo') }}
+        </button>
+      </form>
+    </section>
+    {% endif %}
 
     {% if analysis %}
     {% set r = analysis.result %}
@@ -119,10 +141,24 @@
           <i data-lucide="check"></i> {{ t('analysis.confirm') }}
         </button>
       </form>
+      {% elif analysis.auto_applied %}
+      <p class="small"><i data-lucide="wand-sparkles"></i> {{ t('analysis.auto_applied') }}</p>
       {% elif analysis.needs_review %}
       <p class="muted small">{{ t('analysis.no_change') }}</p>
       {% endif %}
     </section>
+
+    {# 给供应商的回复草稿：可以改，点"发送"才发（模拟） #}
+    {% if analysis.draft %}
+    <section class="card action-card">
+      <h3><i data-lucide="send"></i> {{ t('draft.title') }}</h3>
+      <p class="muted small">{{ t('draft.hint_ai', model=analysis.draft.note) if analysis.draft.mode == 'ai' else t('draft.hint_template') }}</p>
+      <form method="post" action="{{ url_for('send_reply', order_id=o.id) }}" class="stack">
+        <textarea name="message" rows="6" maxlength="1000">{{ analysis.draft.text }}</textarea>
+        <button type="submit" class="btn btn-primary btn-block"><i data-lucide="send"></i> {{ t('draft.send') }}</button>
+      </form>
+    </section>
+    {% endif %}
     {% endif %}
 
     {% if o.status in db.ISSUES %}

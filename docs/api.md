@@ -58,7 +58,15 @@ curl -X POST https://sudahsampai.replit.app/api/delivery-check -H "Content-Type:
 
 ### Web pages
 
-The web pages (order list, new order, order detail, activity log) are described in the main [README](../README.md). Owner-only actions (change reminder rules, resolve a discrepancy, reset demo data) are protected on the server by `@owner_required`.
+The web pages (order list, new order, order detail, activity log) are described in the main [README](../README.md). Owner-only actions (change reminder rules, resolve a discrepancy, confirm an update from a supplier reply, undo an automatic update, reset demo data) are protected on the server by `@owner_required`.
+
+Form endpoints added for supplier replies:
+
+| Route | Who | What it does |
+|---|---|---|
+| `POST /orders/<id>/reply` | anyone | Reads a pasted supplier reply with AI. If the order's auto-apply rule is on and the result is low risk (confirm, or a 1–2 day delay, confidence ≥ 0.8), applies it and logs `auto_applied`. Also returns a reply draft. |
+| `POST /orders/<id>/auto-undo` | owner | Restores the delivery date and status from before the automatic update; refused if the order has changed since. Logs `auto_undone`. |
+| `POST /orders/<id>/reply/send` | anyone | Sends the (edited) draft through `send_message` (simulated) and logs `reply_sent`. Does not change the order and is not charged. |
 
 ## 2. Orbyte capabilities this module depends on
 
@@ -79,6 +87,7 @@ All calls go through `src/orbyte_adapter.py`. Each function is a **mock** today.
 |-------|---------|
 | Each automatic chase message to a supplier | 1 |
 | Each delivery check (web form or `POST /api/delivery-check`) | 1 |
+| A reply sent by a person from the draft | 0 (assumption: manual replies are free; only automatic messages are charged) |
 
 Reminders, overdue notes, rule changes and discrepancy decisions are free.
 
@@ -97,7 +106,7 @@ The AI step (in `src/ai_parser.py`) calls any **OpenAI-compatible** chat API. Wh
 - The page shows which model answered, e.g. "AI: deepseek-chat (DeepSeek)" or "AI: glm-5.3 (RunPod)". It never shows variable names, addresses or keys.
 - The app first asks for strict JSON Schema output and, if the service does not support it, falls back to plain JSON mode. Answers wrapped in a ```json code block or surrounded by extra text are unwrapped first; if no JSON object can be found, the result is marked "needs human check".
 - If the variables are missing, the request takes longer than 15 seconds, or the service returns an error, the app switches to offline keyword rules.
-- **Data sent to the AI (redacted).** Only the reply text, item name, ordered quantity and unit, planned delivery date and simulated date are sent; the supplier name, phone number and order number are not. Before sending, `redact()` replaces phone numbers (e.g. `012-345 6789`, `+60 12-000 1001`), email addresses, names after a title (Encik, Puan, Tuan, Mr, Mrs, Ms, Dr, Uncle, ...) and the supplier's name with `[REDACTED]`. Dates, quantities and prices are kept. The audit log entry `reply_analyzed` ends with "sent to AI redacted (N item(s) hidden)". Names without a title or written in Chinese are not detected (assumption: acceptable for the synthetic demo; a real deployment needs a stronger method).
+- **Data sent to the AI (redacted).** This applies to both calls: reading the reply and drafting the answer (the draft call also receives the parsed result). Only the reply text, item name, ordered quantity and unit, planned delivery date and simulated date are sent; the supplier name, phone number and order number are not. Before sending, `redact()` replaces phone numbers (e.g. `012-345 6789`, `+60 12-000 1001`), email addresses, names after a title (Encik, Puan, Tuan, Mr, Mrs, Ms, Dr, Uncle, ...) and the supplier's name with `[REDACTED]`. Dates, quantities and prices are kept. The audit log entry `reply_analyzed` ends with "sent to AI redacted (N item(s) hidden)". Names without a title or written in Chinese are not detected (assumption: acceptable for the synthetic demo; a real deployment needs a stronger method).
 - `scripts/compare_models.py` runs all sample replies against the currently configured model and prints intent, extracted values, confidence, time and whether a human check is needed, for side-by-side comparison.
 
 ## 4. Assumptions and limits

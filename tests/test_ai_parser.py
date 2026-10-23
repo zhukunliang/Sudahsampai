@@ -330,6 +330,45 @@ class CallOptionsTest(unittest.TestCase):
             self.assertNotIn(private, message)
 
 
+class DraftReplyTest(unittest.TestCase):
+    """回复草稿：没有 AI 或 AI 写得不合格时用模板；模板只用已有的数字，不替店主答应涨价或少货。"""
+
+    def draft(self, **fields):
+        result = dict(ValidationTest.GOOD, intent="unclear", new_delivery_date=None)
+        result.update(fields)
+        with without_api_key():
+            return ai_parser.draft_reply("text", result, ORDER, TODAY)
+
+    def test_templates_without_ai(self):
+        cases = {
+            "confirm": (dict(intent="confirm"), ["2026-10-22", "Terima kasih"]),
+            "delay": (dict(intent="delay", new_delivery_date="2026-10-23"), ["confirm", "2026-10-23", "sahkan"]),
+            "partial": (dict(intent="partial", quantity=12), ["12 箱", "remaining 3 箱", "baki 3 箱"]),
+            "price": (dict(intent="price_change", unit_price=58.0), ["RM 58.00", "owner will check"]),
+            "unclear": (dict(intent="unclear"), ["delivery date and quantity", "tarikh hantar"]),
+        }
+        for name, (fields, expected) in cases.items():
+            with self.subTest(name):
+                draft = self.draft(**fields)
+                self.assertEqual(draft["mode"], "template")
+                for text in expected:
+                    self.assertIn(text, draft["text"])
+
+    def test_bad_ai_draft_falls_back_to_template(self):
+        result = dict(ValidationTest.GOOD, intent="confirm", new_delivery_date=None)
+        for bad in ({}, {"en": "ok"}, {"en": "", "ms": "ok"}, {"en": "x" * 501, "ms": "ok"}):
+            with self.subTest(bad=bad), mock.patch.dict(os.environ, FAKE_AI_ENV), \
+                 mock.patch.object(ai_parser, "_call_draft_model", lambda *a, bad=bad: bad):
+                self.assertEqual(ai_parser.draft_reply("ok", result, ORDER, TODAY)["mode"], "template")
+
+    def test_ai_error_falls_back_to_template(self):
+        def broken(*args):
+            raise ConnectionError("network down")
+        result = dict(ValidationTest.GOOD, intent="confirm", new_delivery_date=None)
+        with mock.patch.dict(os.environ, FAKE_AI_ENV), mock.patch.object(ai_parser, "_call_draft_model", broken):
+            self.assertEqual(ai_parser.draft_reply("ok", result, ORDER, TODAY)["mode"], "template")
+
+
 class RedactTest(unittest.TestCase):
     """发给境外 AI 之前的脱敏：个人信息换成 [REDACTED]，解析需要的内容不能动。"""
 
@@ -375,6 +414,18 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(seen["text"], "[REDACTED]: Jumaat baru sampai, call [REDACTED]")
         self.assertTrue(parsed["sent_redacted"])
         self.assertEqual(parsed["redacted_count"], 2)
+
+    def test_reply_draft_gets_redacted_text_too(self):
+        seen = {}
+
+        def fake(safe_text, result, order, today):
+            seen["text"] = safe_text
+            return {"en": "Thanks, noted.", "ms": "Terima kasih."}
+        result = dict(ValidationTest.GOOD)
+        with mock.patch.dict(os.environ, FAKE_AI_ENV), mock.patch.object(ai_parser, "_call_draft_model", fake):
+            draft = ai_parser.draft_reply("Encik Ali: Jumaat baru sampai, call 012-345 6789", result, ORDER, TODAY)
+        self.assertEqual(seen["text"], "[REDACTED]: Jumaat baru sampai, call [REDACTED]")
+        self.assertEqual(draft, {"text": "Thanks, noted.\n\nTerima kasih.", "mode": "ai", "note": "AI: test-model"})
 
     def test_rule_mode_sends_nothing(self):
         with without_api_key():

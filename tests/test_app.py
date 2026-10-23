@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 # ---- 第 1 步：在导入 app 之前，先把数据库路径指向临时文件夹 ----
 # db.py 在导入时读取这两个环境变量，所以顺序很重要：先设置，再导入
@@ -23,6 +24,7 @@ os.environ["SDC_SIM_PATH"] = os.path.join(TEMP_DIR, "sim_state.json")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
+import ai_parser  # noqa: E402
 import db  # noqa: E402  （必须在设置环境变量之后导入）
 from app import app  # noqa: E402
 
@@ -36,7 +38,8 @@ def tearDownModule():
     shutil.rmtree(TEMP_DIR, ignore_errors=True)
 
 
-class SudahsampaiTest(unittest.TestCase):
+class AppTestCase(unittest.TestCase):
+    """共用的准备工作和小工具（本身没有测试）。"""
 
     def setUp(self):
         """每个测试前：清空数据，模拟日期回到 2026-10-21，准备一个浏览器（test_client）。"""
@@ -75,6 +78,9 @@ class SudahsampaiTest(unittest.TestCase):
 
     def switch_to(self, role):
         self.client.post("/role", data={"role": role})
+
+
+class SudahsampaiTest(AppTestCase):
 
     # ---------- 1. 新增订单：数量填 0 被拒绝 ----------
 
@@ -170,6 +176,142 @@ class SudahsampaiTest(unittest.TestCase):
         self.client.post("/time/forward")
         self.assertEqual(db.today().isoformat(), "2026-10-23")
         self.assertEqual(len(self.logs("auto_chase")), 1)
+
+
+class AutoApplyTest(AppTestCase):
+    """自动应用低风险更新、撤销、回复草稿。用假的模型代替真实 AI：不联网、不花钱。"""
+
+    FAKE_AI_ENV = {"AI_BASE_URL": "http://localhost:9/v1", "AI_API_KEY": "test-key-not-real",
+                   "AI_MODEL": "test-model"}
+
+    def analyze(self, order_id, intent, confidence=0.9, new_date=None, quantity=None, unit_price=None):
+        """模拟"AI 读出了这样的结果"，然后像页面一样提交"分析回复"。草稿模型故意报错，走模板。"""
+        result = {"intent": intent, "new_delivery_date": new_date, "quantity": quantity,
+                  "unit_price": unit_price, "confidence": confidence, "summary_en": "Test reply."}
+
+        def broken_draft(*args):
+            raise ConnectionError("no AI in tests")
+        with mock.patch.dict(os.environ, self.FAKE_AI_ENV), \
+             mock.patch.object(ai_parser, "_call_model", lambda *a: dict(result)), \
+             mock.patch.object(ai_parser, "_call_draft_model", broken_draft):
+            return self.client.post(f"/orders/{order_id}/reply", data={"reply_text": "Test reply from supplier"})
+
+    # ---------- 低风险：自动应用 ----------
+
+    def test_small_delay_with_high_confidence_is_applied_automatically(self):
+        order_id = self.add_order(delivery_date="2026-10-22")
+        response = self.analyze(order_id, "delay", 0.9, new_date="2026-10-24")  # 晚 2 天
+        self.assertEqual(self.get_order(order_id)["delivery_date"], "2026-10-24")
+        self.assertEqual(len(self.logs("auto_applied")), 1)
+        self.assertIn("2026-10-22 → 2026-10-24", self.logs("auto_applied")[0]["detail"])
+        self.assertIn("Updated automatically by your rule", response.get_data(as_text=True))
+
+    def test_confirm_with_high_confidence_is_applied_automatically(self):
+        order_id = self.add_order(delivery_date="2026-10-22")
+        self.analyze(order_id, "confirm", 0.85)
+        self.assertEqual(len(self.logs("auto_applied")), 1)
+        self.assertEqual(self.get_order(order_id)["delivery_date"], "2026-10-22")  # confirm 不改字段
+
+    # ---------- 高风险或规则不允许：不自动应用，订单不变 ----------
+
+    def test_risky_or_unsure_results_wait_for_the_owner(self):
+        cases = {
+            "partial": dict(intent="partial", confidence=0.95, quantity=10),
+            "price_change": dict(intent="price_change", confidence=0.95, unit_price=25.0),
+            "delay_3_days": dict(intent="delay", confidence=0.95, new_date="2026-10-25"),
+            "delay_earlier": dict(intent="delay", confidence=0.95, new_date="2026-10-21"),
+            "low_confidence": dict(intent="delay", confidence=0.79, new_date="2026-10-23"),
+            "unclear": dict(intent="unclear", confidence=0.9),
+        }
+        for name, kwargs in cases.items():
+            with self.subTest(name):
+                order_id = self.add_order(delivery_date="2026-10-22", quantity=15, unit_price=20.0)
+                response = self.analyze(order_id, **kwargs)
+                order = self.get_order(order_id)
+                self.assertEqual(order["delivery_date"], "2026-10-22")
+                self.assertEqual(order["quantity"], 15)
+                self.assertEqual(order["unit_price"], 20.0)
+                self.assertIsNone(order["auto_undo"])
+                self.assertNotIn("Updated automatically by your rule", response.get_data(as_text=True))
+        self.assertEqual(self.logs("auto_applied"), [])
+
+    def test_rule_switched_off_means_no_automatic_update(self):
+        order_id = self.add_order(delivery_date="2026-10-22", auto_apply=0)
+        self.analyze(order_id, "delay", 0.95, new_date="2026-10-23")
+        self.assertEqual(self.get_order(order_id)["delivery_date"], "2026-10-22")
+        self.assertEqual(self.logs("auto_applied"), [])
+
+    def test_owner_can_switch_the_rule_off_but_staff_cannot(self):
+        order_id = self.add_order()
+        self.switch_to(STAFF)
+        self.client.post(f"/orders/{order_id}/rules", data={"remind_days_before": "1", "auto_chase": "1"})
+        self.assertEqual(self.get_order(order_id)["auto_apply"], 1)  # 店员改不了
+        self.switch_to(OWNER)
+        self.client.post(f"/orders/{order_id}/rules", data={"remind_days_before": "1", "auto_chase": "1"})
+        self.assertEqual(self.get_order(order_id)["auto_apply"], 0)  # 没勾选 = 关
+        self.assertIn("auto-apply low-risk updates on→off", self.logs("rules_updated")[-1]["detail"])
+
+    # ---------- 撤销 ----------
+
+    def test_owner_can_undo_an_automatic_update(self):
+        order_id = self.add_order(delivery_date="2026-10-22")
+        self.analyze(order_id, "delay", 0.9, new_date="2026-10-23")
+        self.client.post(f"/orders/{order_id}/auto-undo")
+        order = self.get_order(order_id)
+        self.assertEqual(order["delivery_date"], "2026-10-22")
+        self.assertEqual(order["status"], db.PENDING)
+        self.assertIsNone(order["auto_undo"])
+        self.assertEqual(len(self.logs("auto_undone")), 1)
+        self.assertIn("back to 2026-10-22", self.logs("auto_undone")[0]["detail"])
+
+    def test_undo_brings_an_overdue_order_back_to_overdue(self):
+        db.set_today(db.DEMO_START)  # 10-21；订单 10-20 就该到了
+        order_id = self.add_order(delivery_date="2026-10-20", status=db.OVERDUE)
+        self.analyze(order_id, "delay", 0.9, new_date="2026-10-22")
+        self.assertEqual(self.get_order(order_id)["status"], db.PENDING)
+        self.client.post(f"/orders/{order_id}/auto-undo")
+        order = self.get_order(order_id)
+        self.assertEqual((order["delivery_date"], order["status"]), ("2026-10-20", db.OVERDUE))
+
+    def test_staff_cannot_undo(self):
+        order_id = self.add_order(delivery_date="2026-10-22")
+        self.analyze(order_id, "delay", 0.9, new_date="2026-10-23")
+        self.switch_to(STAFF)
+        response = self.client.post(f"/orders/{order_id}/auto-undo")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.get_order(order_id)["delivery_date"], "2026-10-23")  # 没被撤销
+        self.assertEqual(self.logs("auto_undone"), [])
+        self.assertEqual(len(self.logs("permission_denied")), 1)
+
+    def test_cannot_undo_after_the_order_changed(self):
+        order_id = self.add_order(delivery_date="2026-10-22")
+        self.analyze(order_id, "delay", 0.9, new_date="2026-10-23")
+        self.client.post(f"/orders/{order_id}/receive", data={"received_quantity": "15"})  # 之后已经收货
+        self.client.post(f"/orders/{order_id}/auto-undo")
+        order = self.get_order(order_id)
+        self.assertEqual((order["delivery_date"], order["status"]), ("2026-10-23", db.DELIVERED))
+        self.assertEqual(self.logs("auto_undone"), [])
+
+    # ---------- 回复草稿 ----------
+
+    def test_reply_draft_is_shown_and_can_be_sent(self):
+        order_id = self.add_order(quantity=15, unit="箱")
+        page = self.analyze(order_id, "partial", 0.9, quantity=12).get_data(as_text=True)
+        self.assertIn("remaining 3 箱", page)       # 模板草稿：问剩下的什么时候补
+        self.assertIn("baki 3 箱", page)            # 马来文
+        self.assertIn("Send reply (simulated)", page)
+
+        self.switch_to(STAFF)  # 发消息不改订单，店员也可以发
+        self.client.post(f"/orders/{order_id}/reply/send", data={"message": "Edited reply, thanks!"})
+        sent = self.logs("reply_sent")
+        self.assertEqual(len(sent), 1)
+        self.assertIn("Edited reply, thanks!", sent[0]["detail"])
+        self.assertEqual(self.get_order(order_id)["quantity"], 15)  # 订单没变
+
+    def test_empty_reply_is_not_sent(self):
+        order_id = self.add_order()
+        self.client.post(f"/orders/{order_id}/reply/send", data={"message": "   "})
+        self.assertEqual(self.logs("reply_sent"), [])
 
 
 if __name__ == "__main__":

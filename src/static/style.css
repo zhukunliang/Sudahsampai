@@ -302,6 +302,10 @@ label.check input { width: 18px; height: 18px; }
 .why { display: flex; gap: 8px; align-items: flex-start; margin: 16px 0 0; padding: 10px 12px; background: #f6f8f7; border-radius: 10px; font-size: 14px; color: #3d4844; }
 /* "下一步"卡片：不用彩色顶边条，需要处理时用深一点的灰色边框突出 */
 .action-urgent { border-color: var(--border-strong); }
+/* 自动应用的卡片：用主色边框，一眼看出是"系统替你改的" */
+.auto-card { border-color: var(--primary); background: var(--primary-soft); }
+.auto-card p:first-of-type { font-weight: 600; }
+.auto-card p:first-of-type::first-letter { text-transform: uppercase; }
 .collapsible summary { cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 8px; list-style: none; }
 .collapsible summary::-webkit-details-marker { display: none; }
 .collapsible summary::after { content: "▾"; margin-left: auto; color: var(--muted); }

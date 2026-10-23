@@ -96,6 +96,7 @@ def decorate(row):
         o["reason"] = ("reason.normal", {"remind": remind, "n": days_left})
 
     o["diff"] = diff_info(o)
+    o["undo"] = auto_undo_info(o)  # 上一次自动应用还能撤销时，订单页显示"已按你的规则自动更新"
     o["value"] = money(o["quantity"], o["unit_price"])
     o["late_days"] = 0
     if o["received_at"]:
@@ -435,7 +436,9 @@ def review_reason(parsed):
 
 @app.route("/orders/<int:order_id>/reply", methods=["POST"])
 def analyze_reply(order_id):
-    """粘贴供应商回复 → AI 分析。任何角色都可以；只分析、写日志，不修改订单。"""
+    """粘贴供应商回复 → AI 分析。任何角色都可以。
+    一般只分析、写日志，不修改订单；只有低风险的结果（见 is_low_risk）会按店主的规则自动应用，店主可以撤销。
+    最后再生成一条给供应商的回复草稿。"""
     reply_text = request.form.get("reply_text", "").strip()
     with db.connect() as conn:
         o = get_order(conn, order_id)
@@ -453,6 +456,12 @@ def analyze_reply(order_id):
                            f"{', needs human check' if parsed['needs_review'] else ''}"
                            f"{'; sent to AI redacted (' + str(parsed['redacted_count']) + ' item(s) hidden)' if parsed['sent_redacted'] else ''}",
                            order_id)
+        parsed["auto_applied"] = is_low_risk(o, parsed, changes)
+        if parsed["auto_applied"]:
+            auto_apply(conn, o, r, changes)
+            parsed["can_apply"] = False
+            o = get_order(conn, order_id)  # 重新读一次，页面显示更新后的订单
+        parsed["draft"] = ai_parser.draft_reply(reply_text, r, o, db.today())
         return render_detail(conn, o, analysis=parsed, reply_text=reply_text)
 
 
@@ -478,26 +487,126 @@ def apply_reply(order_id):
             flash(t("flash.reply_rejected"), "error")
             return redirect(url_for("order_detail", order_id=order_id))
 
-        amount = None  # 涨价时：这张订单因此多付的钱，记为"避免的损失"
-        if result["intent"] == "partial":
-            conn.execute("UPDATE orders SET quantity = ? WHERE id = ?", (result["quantity"], order_id))
-        if result["intent"] in ("delay", "partial") and result["new_delivery_date"]:
-            # 改了交货日期：如果之前已经逾期、而新日期还没到，就回到"待送达"
-            new_status = db.PENDING if result["new_delivery_date"] >= db.today().isoformat() else o["status"]
-            conn.execute("UPDATE orders SET delivery_date = ?, status = ? WHERE id = ?",
-                         (result["new_delivery_date"], new_status, order_id))
-        if result["intent"] == "price_change":
-            conn.execute("UPDATE orders SET unit_price = ? WHERE id = ?", (result["unit_price"], order_id))
-            if o["unit_price"] is not None and result["unit_price"] > o["unit_price"]:
-                amount = money(o["quantity"], result["unit_price"] - o["unit_price"])
-        # confirm：不改订单字段，只写日志
-
+        amount = apply_changes(conn, o, result)
         user = orbyte.get_current_user()
         orbyte.write_audit(conn, "reply_applied",
                            f"#{order_id} {user['name']} (owner) confirmed: {join_changes(changes, t_en)}. "
                            f"Original: \"{reply_text[:200]}\". Parsed: {json.dumps(result, ensure_ascii=False)}",
                            order_id, amount=amount)
     flash(t("flash.reply_applied", change=join_changes(changes, t)), "ok")
+    return redirect(url_for("order_detail", order_id=order_id))
+
+
+def apply_changes(conn, o, result):
+    """按解析结果修改订单（店主确认时和自动应用时共用）。返回涨价多付的钱（记为"避免的损失"），没有就是 None。
+    改完以后，之前那次自动应用就不能再撤销了（清空 auto_undo）。"""
+    order_id = o["id"]
+    amount = None
+    if result["intent"] == "partial":
+        conn.execute("UPDATE orders SET quantity = ? WHERE id = ?", (result["quantity"], order_id))
+    if result["intent"] in ("delay", "partial") and result["new_delivery_date"]:
+        # 改了交货日期：如果之前已经逾期、而新日期还没到，就回到"待送达"
+        new_status = db.PENDING if result["new_delivery_date"] >= db.today().isoformat() else o["status"]
+        conn.execute("UPDATE orders SET delivery_date = ?, status = ? WHERE id = ?",
+                     (result["new_delivery_date"], new_status, order_id))
+    if result["intent"] == "price_change":
+        conn.execute("UPDATE orders SET unit_price = ? WHERE id = ?", (result["unit_price"], order_id))
+        if o["unit_price"] is not None and result["unit_price"] > o["unit_price"]:
+            amount = money(o["quantity"], result["unit_price"] - o["unit_price"])
+    # confirm：不改订单字段，只写日志
+    conn.execute("UPDATE orders SET auto_undo = NULL WHERE id = ?", (order_id,))
+    return amount
+
+
+# ---------- 自动应用低风险更新（店主可以在提醒规则里关掉，也可以撤销） ----------
+
+AUTO_APPLY_CONFIDENCE = 0.8   # 把握度至少要这么高
+AUTO_APPLY_MAX_DAYS_LATER = 2  # 延期最多晚这么多天才算低风险
+
+
+def is_low_risk(o, parsed, changes):
+    """这条回复能不能不等店主、直接自动应用。只有两种情况算低风险：
+    - 供应商确认按原计划送货（confirm）；
+    - 延期（delay），新日期比原定晚 1～2 天，而且不早于今天。
+    还必须：这张订单开着"自动应用"、把握度 ≥ 0.8、不需要人工确认、确实有要改的内容。
+    少货、涨价、看不懂、把握度低，一律留给店主确认。"""
+    r = parsed["result"]
+    if not o["auto_apply"] or parsed["needs_review"] or not changes or r["confidence"] < AUTO_APPLY_CONFIDENCE:
+        return False
+    if r["intent"] == "confirm":
+        return True
+    if r["intent"] == "delay" and r["new_delivery_date"]:
+        new = date.fromisoformat(r["new_delivery_date"])
+        days_later = (new - date.fromisoformat(o["delivery_date"])).days
+        return 0 < days_later <= AUTO_APPLY_MAX_DAYS_LATER and new >= db.today()
+    return False
+
+
+def auto_apply(conn, o, result, changes):
+    """自动应用，并记下撤销需要的信息：改之前和改之后的交货日期、状态，以及改了什么。"""
+    before = {"delivery_date": o["delivery_date"], "status": o["status"]}
+    apply_changes(conn, o, result)
+    new = get_order(conn, o["id"])
+    after = {"delivery_date": new["delivery_date"], "status": new["status"]}
+    undo = {"before": before, "after": after, "changes": changes, "confidence": result["confidence"]}
+    conn.execute("UPDATE orders SET auto_undo = ? WHERE id = ?", (json.dumps(undo), o["id"]))
+    orbyte.write_audit(conn, "auto_applied",
+                       f"#{o['id']} Applied automatically by the owner's rule (low risk: {result['intent']}, "
+                       f"confidence {result['confidence']:.2f} ≥ {AUTO_APPLY_CONFIDENCE:.2f}): "
+                       f"{join_changes(changes, t_en)}", o["id"], actor=orbyte.SYSTEM)
+
+
+def auto_undo_info(o):
+    """上一次自动应用的撤销信息。如果订单之后又变过（交货日期或状态和自动应用后的不一样），
+    就不能再撤销，返回 None——免得把店主后来做的修改也一起撤掉。"""
+    if not o["auto_undo"]:
+        return None
+    try:
+        info = json.loads(o["auto_undo"])
+    except ValueError:
+        return None
+    if any(o[key] != value for key, value in info["after"].items()):
+        return None
+    return info
+
+
+@app.route("/orders/<int:order_id>/auto-undo", methods=["POST"])
+@owner_required("action.undo_auto")
+def undo_auto(order_id):
+    """撤销自动应用：交货日期和状态改回原来的样子，写日志。只有店主能撤销。"""
+    with db.connect() as conn:
+        o = get_order(conn, order_id)
+        info = auto_undo_info(o)
+        if info is None:
+            flash(t("flash.undo_unavailable"), "error")
+        else:
+            before = info["before"]
+            conn.execute("UPDATE orders SET delivery_date = ?, status = ?, auto_undo = NULL WHERE id = ?",
+                         (before["delivery_date"], before["status"], order_id))
+            orbyte.write_audit(conn, "auto_undone",
+                               f"#{order_id} {orbyte.get_current_user()['name']} (owner) undid the automatic "
+                               f"update ({join_changes(info['changes'], t_en)}); delivery date back to "
+                               f"{before['delivery_date']}, status back to {before['status']}", order_id)
+            flash(t("flash.auto_undone"), "ok")
+    return redirect(url_for("order_detail", order_id=order_id) + "#next")
+
+
+@app.route("/orders/<int:order_id>/reply/send", methods=["POST"])
+def send_reply(order_id):
+    """把回复草稿（可能已经改过）发给供应商：模拟发送，写日志。
+    任何角色都可以发：发消息不会修改订单，而且每次都是人点了"发送"才发。"""
+    text = request.form.get("message", "").strip()
+    with db.connect() as conn:
+        o = get_order(conn, order_id)
+        if not text or len(text) > ai_parser.MAX_REPLY_LENGTH:
+            flash(t("flash.reply_empty"), "error")
+        else:
+            contact = orbyte.get_supplier_contact(o)
+            receipt = orbyte.send_message(contact, text)
+            orbyte.write_audit(conn, "reply_sent",
+                               f"#{order_id} Reply sent via Orbyte Connect to WhatsApp "
+                               f"{receipt['to'] or '(none)'} (simulated):\n\n{text}", order_id)
+            flash(t("flash.reply_sent", supplier=contact["name"]), "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 
 
@@ -527,11 +636,14 @@ def update_rules(order_id):
             flash(t("flash.rules_invalid"), "error")
             return redirect(url_for("order_detail", order_id=order_id))
         auto = 1 if request.form.get("auto_chase") else 0
-        conn.execute("UPDATE orders SET remind_days_before = ?, auto_chase = ? WHERE id = ?",
-                     (remind, auto, order_id))
+        auto_apply_on = 1 if request.form.get("auto_apply") else 0
+        conn.execute("UPDATE orders SET remind_days_before = ?, auto_chase = ?, auto_apply = ? WHERE id = ?",
+                     (remind, auto, auto_apply_on, order_id))
+        on_off = {0: "off", 1: "on"}
         orbyte.write_audit(conn, "rules_updated",
                            f"#{order_id} Remind {o['remind_days_before']}→{remind} day(s) before, "
-                           f"auto-chase {'on' if o['auto_chase'] else 'off'}→{'on' if auto else 'off'}", order_id)
+                           f"auto-chase {on_off[o['auto_chase']]}→{on_off[auto]}, "
+                           f"auto-apply low-risk updates {on_off[o['auto_apply']]}→{on_off[auto_apply_on]}", order_id)
     flash(t("flash.rules_saved"), "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 

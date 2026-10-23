@@ -51,7 +51,10 @@ Supplier replies are informal and mix languages, e.g. *"Bos, sorry ya 青菜 har
 - The reply is turned into a fixed JSON result: `intent` (delay / partial / price_change / confirm / unclear), `new_delivery_date`, `quantity`, `unit_price`, `confidence`, `summary_en`. Relative dates such as "Jumaat" (Friday) are converted using the simulated date.
 - The server validates every field. If validation fails, `confidence` is below 0.6, or the intent is unclear, the result is marked **needs human check** and no update is offered.
 - The system then gives a rule-based suggestion (for example, how many days later the new date is) and **only the owner** can confirm the update. The log records the original text, the AI result and who confirmed it.
+- **Low-risk updates can apply themselves.** Each order has an owner-only switch "Apply low-risk supplier updates automatically" (on by default). If the result has confidence ≥ 0.8 and is low risk — the supplier confirms, or delays by 1–2 days to a date not in the past — the update is applied at once, logged as `auto_applied`, and the order page shows "Updated automatically by your rule" with an **Undo** button (owner only; undoing is logged as `auto_undone`). Partial deliveries, price changes, unclear replies and anything below 0.8 always wait for the owner.
+- **Reply draft.** After each analysis, the AI drafts a short, polite reply in English and Malay based on the intent (e.g. confirm the new date, ask when the remaining quantity will come). It never accepts a price change or a smaller quantity on the owner's behalf. The draft can be edited and is sent only when someone clicks "Send reply (simulated)" (through `orbyte_adapter.send_message`, logged as `reply_sent`). Without AI, a fixed template is used.
 - If the AI service is not configured, takes longer than 15 seconds, or returns an error, the app switches to a **rule mode** (keywords + regular expressions) and labels it on the page, so the demo never stops.
+- Both AI calls (reading the reply and drafting the answer) send only redacted text, see Data & Privacy.
 - All AI code is in `src/ai_parser.py`. The model is reached through any OpenAI-compatible API set by environment variables; the live demo uses the DeepSeek API (`deepseek-chat`).
 
 Other features:
@@ -160,7 +163,7 @@ python -m unittest discover tests
 
 There are 36 tests in two files. They never call a real AI service and need no API key.
 
-- `tests/test_app.py` uses a temporary database and simulated-date file (via the `SDC_DB_PATH` and `SDC_SIM_PATH` environment variables) and deletes them afterwards, so `data/sdc.db` is never touched. It covers: rejecting a zero quantity, matching and mismatched deliveries, staff being blocked from owner-only actions, and auto-chase on overdue orders without duplicates on the same day.
+- `tests/test_app.py` uses a temporary database and simulated-date file (via the `SDC_DB_PATH` and `SDC_SIM_PATH` environment variables) and deletes them afterwards, so `data/sdc.db` is never touched. It covers: rejecting a zero quantity, matching and mismatched deliveries, staff being blocked from owner-only actions, auto-chase on overdue orders without duplicates on the same day, low-risk updates applied automatically, risky ones left for the owner, undo (owner only, refused once the order has changed), and sending a reply draft.
 - `tests/test_ai_parser.py` covers the rule mode on every sample reply and on mixed messages such as *"Jumaat baru boleh hantar, 12 kotak je dulu"* (delay + partial: 12 boxes, next Friday), the rule that "confirm" is only chosen when no delay, partial or price signal is present, server-side validation of bad AI results, and falling back to rule mode when the AI times out or fails.
 
 ## How We Use Replit

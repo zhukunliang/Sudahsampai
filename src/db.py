@@ -37,7 +37,7 @@ ISSUES = (DISCREPANCY, RESTOCK_REQUESTED, NEGOTIATING)
 WAITING = (RESTOCK_REQUESTED, NEGOTIATING)
 
 # 表结构每改一次就把这个数字加 1，启动时发现版本不同就重建
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # 日志动作 → (标签文字的 key, 标签颜色)。同一类动作用同一种颜色；不在表里的动作显示灰色"其他"
 ACTION_TAGS = {
@@ -57,6 +57,9 @@ ACTION_TAGS = {
     "credit_charged": ("tag.credit", "gray-blue"),
     "reply_analyzed": ("tag.ai", "teal"),
     "reply_applied": ("tag.applied", "teal"),
+    "auto_applied": ("tag.auto", "teal"),
+    "auto_undone": ("tag.undo", "gray"),
+    "reply_sent": ("tag.reply_sent", "blue"),
 }
 OTHER_TAG = ("tag.other", "gray")
 
@@ -77,7 +80,9 @@ CREATE TABLE IF NOT EXISTS orders (
     status TEXT NOT NULL DEFAULT 'pending', -- 见上面的状态列表
     received_quantity INTEGER,           -- 实际到货数量
     received_at TEXT,                    -- 实际到货日期（模拟日期）YYYY-MM-DD
-    on_time INTEGER                      -- 是否准时：1 准时 / 0 迟到 / 空 = 还没到货
+    on_time INTEGER,                     -- 是否准时：1 准时 / 0 迟到 / 空 = 还没到货
+    auto_apply INTEGER NOT NULL DEFAULT 1, -- 是否自动应用低风险的供应商回复 0/1（店主可改，默认开）
+    auto_undo TEXT                       -- 上一次自动应用的撤销信息（JSON：改之前、改之后、改了什么）；没有就为空
 );
 
 CREATE TABLE IF NOT EXISTS logs (
