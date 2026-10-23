@@ -7,11 +7,14 @@
 - 真正修改订单永远要店主点"确认"（在 app.py 里）。
 
 模型通过 OpenAI 兼容接口调用，地址、密钥、模型名全部来自环境变量（Replit Secrets）：
-    AI_BASE_URL  例如 RunPod Serverless vLLM：https://api.runpod.ai/v2/<ENDPOINT_ID>/openai/v1
-                 或 DeepSeek：https://api.deepseek.com
+    AI_BASE_URL  例如 DeepSeek：https://api.deepseek.com
+                 或 RunPod 公共接口：https://api.runpod.ai/v2/<ENDPOINT_ID>/openai/v1
     AI_API_KEY   密钥（代码里不出现任何密钥）
-    AI_MODEL     例如 Qwen/Qwen2.5-7B-Instruct 或 deepseek-chat
-换成别的 OpenAI 兼容服务只要改这三个环境变量，代码不用动。
+    AI_MODEL     例如 deepseek-chat 或 glm-5.3
+两个可选的：
+    AI_MAX_TOKENS        模型最多输出多少 token，默认 400（会"先思考再回答"的模型要调大）
+    AI_REASONING_EFFORT  例如 low；设置了才传给模型，没设置就不传（DeepSeek 不需要）
+换成别的 OpenAI 兼容服务只要改这些环境变量，代码不用动。
 
 三个变量没设齐、请求超过 15 秒或出错时，自动换成下面的规则解析器（关键词 + 正则），
 页面上标注"规则模式"，Demo 不会因为 API 出问题而中断。
@@ -23,6 +26,7 @@ from datetime import date, timedelta
 
 AI_ENV_VARS = ("AI_BASE_URL", "AI_API_KEY", "AI_MODEL")
 REQUEST_TIMEOUT_SECONDS = 15
+DEFAULT_MAX_TOKENS = 400
 INTENTS = ("delay", "partial", "price_change", "confirm", "unclear")
 CONFIDENCE_THRESHOLD = 0.6
 MAX_REPLY_LENGTH = 1000  # 太长的文本截断前先拒绝，避免意外的大额调用
@@ -98,13 +102,21 @@ def parse_reply(text, order, today):
 
 
 def provider_name():
-    """页面上显示的 AI 服务名字，从地址里认出来（不显示环境变量名，也不显示地址本身）。"""
+    """AI 服务商的名字，从地址里认出来；认不出来返回 None。"""
     url = os.environ.get("AI_BASE_URL", "").lower()
+    if "runpod.ai" in url:
+        return "RunPod"
     if "deepseek" in url:
         return "DeepSeek"
-    if "runpod" in url:
-        return "RunPod"
-    return "online model"
+    return None
+
+
+def ai_label():
+    """页面上显示的模式名称，例如 "AI: glm-5.3 (RunPod)"。只用模型名和服务商名，
+    不显示环境变量名、地址或密钥。"""
+    model = os.environ.get("AI_MODEL", "").strip() or "model"
+    provider = provider_name()
+    return f"AI: {model} ({provider})" if provider else f"AI: {model}"
 
 
 def _package(result, mode, reason, problems):
@@ -113,7 +125,7 @@ def _package(result, mode, reason, problems):
         problems = [f"把握度 {result['confidence']:.2f} 低于 {CONFIDENCE_THRESHOLD}"]
     if result["intent"] == "unclear" and "看不懂供应商的意思" not in problems:
         problems = problems + ["看不懂供应商的意思"]
-    note = f"AI: {provider_name()}" if mode == "ai" else "Offline rules (AI unavailable)"
+    note = ai_label() if mode == "ai" else "Offline rules (AI unavailable)"
     return {"result": result, "mode": mode, "mode_note": note, "mode_reason": reason,
             "needs_review": needs_review, "problems": problems}
 
@@ -138,13 +150,18 @@ def _call_model(text, order, today):
         f"planned delivery {order['delivery_date']}, supplier {order['supplier']}\n\n"
         f"Supplier reply:\n{text}"
     )
+    options = {"max_tokens": max_tokens_setting()}  # 每次都传
+    effort = os.environ.get("AI_REASONING_EFFORT", "").strip()
+    if effort:
+        options["reasoning_effort"] = effort  # 只有设置了才传，没设置就完全不传（DeepSeek 照常工作）
+
     def ask(response_format):
         return client.chat.completions.create(
             model=os.environ["AI_MODEL"],
             messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_message}],
             response_format=response_format,
             temperature=0,  # 解析任务不需要创意，每次结果尽量一致
-            max_tokens=400,
+            **options,
         )
 
     response = None
@@ -163,7 +180,39 @@ def _call_model(text, order, today):
     choice = response.choices[0]
     if choice.finish_reason == "length":
         raise RuntimeError("response cut off")
-    return json.loads(choice.message.content)
+    # 有的服务会在 JSON 外面包 ```json 代码块，或者前后加几句话：先把 JSON 提取出来。
+    # 提取不出来就返回 None，validate() 会把它当成解析失败，标记"需要人工确认"
+    return extract_json(choice.message.content)
+
+
+def max_tokens_setting():
+    """AI_MAX_TOKENS 环境变量；没设置或不是正整数时用默认的 400。"""
+    value = os.environ.get("AI_MAX_TOKENS", "").strip()
+    return int(value) if value.isdigit() and int(value) > 0 else DEFAULT_MAX_TOKENS
+
+
+def extract_json(content):
+    """从模型的回答里取出 JSON 对象（dict）。依次尝试：
+    1. 整段就是 JSON；2. ```json ... ``` 代码块里的内容；3. 第一个 { 到最后一个 } 之间的内容。
+    都不行（或者取出来的不是对象）就返回 None。"""
+    if not isinstance(content, str):
+        return None
+    text = content.strip()
+    candidates = [text]
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        candidates.append(fenced.group(1).strip())
+    start, end = text.find("{"), text.rfind("}")
+    if 0 <= start < end:
+        candidates.append(text[start:end + 1])
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
 
 
 # ---------- 后端校验（AI 和规则的结果都要过这一关） ----------

@@ -210,7 +210,7 @@ class AIModeFallbackTest(unittest.TestCase):
     def test_good_ai_result_is_used(self):
         parsed = self.parse_with_fake_model(lambda *a: dict(ValidationTest.GOOD))
         self.assertEqual(parsed["mode"], "ai")
-        self.assertEqual(parsed["mode_note"], "AI: online model")
+        self.assertEqual(parsed["mode_note"], "AI: test-model")  # 认不出服务商时只显示模型名
         self.assertFalse(parsed["needs_review"])
 
     def test_deepseek_label(self):
@@ -218,7 +218,22 @@ class AIModeFallbackTest(unittest.TestCase):
         with mock.patch.dict(os.environ, env), \
              mock.patch.object(ai_parser, "_call_model", lambda *a: dict(ValidationTest.GOOD)):
             parsed = ai_parser.parse_reply("Jumaat baru sampai", ORDER, TODAY)
-        self.assertEqual(parsed["mode_note"], "AI: DeepSeek")
+        self.assertEqual(parsed["mode_note"], "AI: test-model (DeepSeek)")
+
+    def test_runpod_label_has_no_url_or_key(self):
+        env = dict(FAKE_AI_ENV, AI_BASE_URL="https://api.runpod.ai/v2/abc123/openai/v1", AI_MODEL="glm-5.3")
+        with mock.patch.dict(os.environ, env), \
+             mock.patch.object(ai_parser, "_call_model", lambda *a: dict(ValidationTest.GOOD)):
+            parsed = ai_parser.parse_reply("Jumaat baru sampai", ORDER, TODAY)
+        self.assertEqual(parsed["mode_note"], "AI: glm-5.3 (RunPod)")
+        for secret in ("abc123", "test-key-not-real", "AI_"):
+            self.assertNotIn(secret, parsed["mode_note"])
+
+    def test_unextractable_answer_needs_review(self):
+        parsed = self.parse_with_fake_model(lambda *a: None)  # extract_json 取不出 JSON 时返回 None
+        self.assertEqual(parsed["mode"], "ai")
+        self.assertTrue(parsed["needs_review"])
+        self.assertEqual(parsed["result"]["intent"], "unclear")
 
     def test_timeout_falls_back_to_rules(self):
         class APITimeoutError(Exception):  # 和 openai 库里超时异常同名
@@ -246,6 +261,65 @@ class AIModeFallbackTest(unittest.TestCase):
         self.assertEqual(parsed["mode"], "rules")
         self.assertEqual(parsed["mode_reason"], "AI error (ConnectionError)")
         self.assertEqual(parsed["result"]["new_delivery_date"], "2026-10-23")  # 规则模式照样能读出日期
+
+
+class ExtractJsonTest(unittest.TestCase):
+    """有的服务会在 JSON 外面包代码块或者加几句话，要先提取出来。"""
+
+    def test_plain_json(self):
+        self.assertEqual(ai_parser.extract_json('{"intent": "delay"}'), {"intent": "delay"})
+
+    def test_code_fence(self):
+        self.assertEqual(ai_parser.extract_json('```json\n{"intent": "delay"}\n```'), {"intent": "delay"})
+        self.assertEqual(ai_parser.extract_json('```\n{"intent": "confirm"}\n```'), {"intent": "confirm"})
+
+    def test_text_around(self):
+        content = 'Sure! Here is the result:\n{"intent": "partial", "quantity": 12}\nHope this helps.'
+        self.assertEqual(ai_parser.extract_json(content), {"intent": "partial", "quantity": 12})
+
+    def test_failures_return_none(self):
+        for content in ("no json here", "[1, 2, 3]", '{"intent": "delay"', "", None):
+            with self.subTest(content=content):
+                self.assertIsNone(ai_parser.extract_json(content))
+
+
+class CallOptionsTest(unittest.TestCase):
+    """max_tokens 每次都传；reasoning_effort 只有设置了才传。用假的 OpenAI 客户端，不联网。"""
+
+    def call_with_env(self, extra_env):
+        sent = {}
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                sent.update(kwargs)
+                message = mock.Mock(content='{"intent": "confirm"}')
+                return mock.Mock(choices=[mock.Mock(finish_reason="stop", message=message)])
+
+        class FakeOpenAI:
+            def __init__(self, **kwargs):
+                self.chat = mock.Mock(completions=FakeCompletions())
+
+        env = dict(FAKE_AI_ENV, AI_MAX_TOKENS="", AI_REASONING_EFFORT="")
+        env.update(extra_env)
+        with mock.patch.dict(os.environ, env), mock.patch("openai.OpenAI", FakeOpenAI), \
+             mock.patch.dict(ai_parser._schema_supported, {"value": None}):
+            result = ai_parser._call_model("ok boss", ORDER, TODAY)
+        return sent, result
+
+    def test_defaults_send_max_tokens_but_no_reasoning_effort(self):
+        sent, result = self.call_with_env({})
+        self.assertEqual(sent["max_tokens"], 400)
+        self.assertNotIn("reasoning_effort", sent)
+        self.assertEqual(result, {"intent": "confirm"})
+
+    def test_optional_settings_are_sent(self):
+        sent, _ = self.call_with_env({"AI_MAX_TOKENS": "1500", "AI_REASONING_EFFORT": "low"})
+        self.assertEqual(sent["max_tokens"], 1500)
+        self.assertEqual(sent["reasoning_effort"], "low")
+
+    def test_bad_max_tokens_falls_back_to_default(self):
+        sent, _ = self.call_with_env({"AI_MAX_TOKENS": "lots"})
+        self.assertEqual(sent["max_tokens"], 400)
 
 
 if __name__ == "__main__":
