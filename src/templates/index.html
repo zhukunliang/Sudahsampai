@@ -31,6 +31,32 @@
 </section>
 {% endif %}
 
+{# 说明区：第一眼告诉用户这个模块是做什么的。可以折叠，折叠状态存在浏览器的 localStorage 里 #}
+<details class="intro" id="intro" open>
+  <summary><i data-lucide="info"></i> {{ t('intro.toggle') }}</summary>
+  <p class="intro-title">{{ t('intro.title') }}</p>
+  <ol class="intro-steps">
+    <li><span class="step-icon"><i data-lucide="clipboard-list"></i></span>
+      <div><b>{{ t('intro.step1') }}</b><span>{{ t('intro.step1_hint') }}</span></div></li>
+    <li><span class="step-icon"><i data-lucide="message-square-text"></i></span>
+      <div><b>{{ t('intro.step2') }}</b><span>{{ t('intro.step2_hint') }}</span></div></li>
+    <li><span class="step-icon"><i data-lucide="badge-check"></i></span>
+      <div><b>{{ t('intro.step3') }}</b><span>{{ t('intro.step3_hint') }}</span></div></li>
+  </ol>
+</details>
+<script>
+  // 放在说明区后面立刻执行：之前折叠过就马上收起，避免页面先展开再收起地闪一下
+  (function () {
+    var intro = document.getElementById("intro");
+    try {
+      if (localStorage.getItem("sudahsampai.introCollapsed") === "1") { intro.removeAttribute("open"); }
+      intro.addEventListener("toggle", function () {
+        localStorage.setItem("sudahsampai.introCollapsed", intro.open ? "0" : "1");
+      });
+    } catch (e) { /* 浏览器禁用了 localStorage：照常显示，只是不记住 */ }
+  })();
+</script>
+
 <div class="page-head">
   <div>
     <h1>{{ t('dash.title') }}</h1>
@@ -39,36 +65,13 @@
   <a class="btn btn-primary" href="{{ url_for('new_order') }}"><i data-lucide="plus"></i> {{ t('nav.new_order') }}</a>
 </div>
 
-{# 四张数字卡片 #}
-<section class="stats">
-  <div class="stat stat-red">
-    <div class="stat-icon"><i data-lucide="circle-alert"></i></div>
-    <div><div class="stat-value">{{ dash.needs_action }}</div><div class="stat-label">{{ t('card.needs_action') }}</div>
-    <div class="stat-hint">{{ t('card.needs_action_hint') }}</div></div>
-  </div>
-  <div class="stat stat-amber">
-    <div class="stat-icon"><i data-lucide="truck"></i></div>
-    <div><div class="stat-value">{{ dash.arriving }}</div><div class="stat-label">{{ t('card.arriving') }}</div>
-    <div class="stat-hint">{{ t('card.arriving_hint') }}</div></div>
-  </div>
-  <div class="stat stat-blue">
-    <div class="stat-icon"><i data-lucide="hourglass"></i></div>
-    <div><div class="stat-value">{{ dash.waiting }}</div><div class="stat-label">{{ t('card.waiting') }}</div>
-    <div class="stat-hint">{{ t('card.waiting_hint') }}</div></div>
-  </div>
-  <div class="stat stat-green">
-    <div class="stat-icon"><i data-lucide="shield-check"></i></div>
-    <div><div class="stat-value">{{ rm(losses) }}</div><div class="stat-label">{{ t('card.losses') }}</div>
-    <div class="stat-hint">{{ t('card.losses_hint') }}</div></div>
-  </div>
-</section>
-
-{# 今日待办：必须处理 / 需要了解 / 等待回复，每一项都有直接操作的按钮 #}
-<section class="card">
+{# 今日待办放在最显眼的位置：左边大块是"必须处理"，右边是"需要了解"和"等待回复" #}
+<section class="card todo-card">
   <h2><i data-lucide="list-checks"></i> {{ t('todo.title') }}</h2>
   {% if not (dash.groups[0][2] or dash.groups[1][2] or dash.groups[2][2]) %}
     <p class="muted">{{ t('todo.all_clear') }}</p>
   {% else %}
+  {% set first = namespace(done=false) %}
   <div class="todo-groups">
     {% for title, kind, items in dash.groups %}
     <div class="todo-group todo-{{ kind }}">
@@ -78,6 +81,14 @@
         <i data-lucide="{{ icon }}" class="todo-icon"></i>
         <span class="todo-text">{{ t(key, **params) }}</span>
         <a class="btn btn-small {{ 'btn-primary' if kind == 'must' else 'btn-secondary' }}" href="{{ link }}">{{ t(button) }}</a>
+        {# 第一次打开时，在第一项旁边提示从哪里开始（脚本决定显不显示） #}
+        {% if not first.done %}{% set first.done = true %}
+        <div class="start-hint" id="start-hint" hidden>
+          <i data-lucide="sparkles"></i>
+          <span>{{ t('hint.start_overdue') if key == 'todo.overdue' else t('hint.start_other') }}</span>
+          <button type="button" class="hint-close">{{ t('hint.got_it') }}</button>
+        </div>
+        {% endif %}
       </div>
       {% else %}
       <p class="muted small">{{ t('todo.empty') }}</p>
@@ -86,6 +97,35 @@
     {% endfor %}
   </div>
   {% endif %}
+</section>
+<script>
+  // "从这里开始"提示只在第一次打开时显示；点"知道了"或点这一项的按钮后就不再显示
+  (function () {
+    var hint = document.getElementById("start-hint");
+    if (!hint) { return; }
+    var KEY = "sudahsampai.startHintSeen";
+    function seen() { try { localStorage.setItem(KEY, "1"); } catch (e) {} hint.hidden = true; }
+    try { if (localStorage.getItem(KEY) === "1") { return; } } catch (e) {}
+    hint.hidden = false;
+    hint.querySelector(".hint-close").addEventListener("click", seen);
+    hint.parentNode.querySelector(".btn").addEventListener("click", seen);
+  })();
+</script>
+
+{# 数字缩小成一行，作为补充信息 #}
+<section class="stats">
+  <div class="stat" title="{{ t('card.needs_action_hint') }}">
+    <span class="stat-value {{ 'stat-alert' if dash.needs_action }}">{{ dash.needs_action }}</span> {{ t('card.needs_action') }}
+  </div>
+  <div class="stat" title="{{ t('card.arriving_hint') }}">
+    <span class="stat-value">{{ dash.arriving }}</span> {{ t('card.arriving') }}
+  </div>
+  <div class="stat" title="{{ t('card.waiting_hint') }}">
+    <span class="stat-value">{{ dash.waiting }}</span> {{ t('card.waiting') }}
+  </div>
+  <div class="stat" title="{{ t('card.losses_hint') }}">
+    <span class="stat-value stat-good">{{ rm(losses) }}</span> {{ t('card.losses') }}
+  </div>
 </section>
 
 {# 完整订单列表：桌面是表格，手机是卡片 #}

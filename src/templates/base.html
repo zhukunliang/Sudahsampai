@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Sudahsampai · Orbyte{% endblock %}</title>
+  {# 标题和 logo 用 Plus Jakarta Sans（Google Fonts）。加载失败时退回系统字体 #}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&display=swap">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   {# 图标：Lucide（CDN）。加载失败时只是少了图标，页面照常能用 #}
   <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js" defer></script>
@@ -33,9 +37,14 @@
 
   <header class="topbar">
     <div class="topbar-inner">
-      <a class="brand" href="{{ url_for('index') }}">
-        <span class="brand-mark"><i data-lucide="package"></i></span>
-        <span class="brand-parent">Orbyte ›</span> <b>Sudahsampai</b>
+      {# 文字 logo："sudah"（已经）+ "sampai"（到了），前面一个打勾的箱子 #}
+      <a class="brand" href="{{ url_for('index') }}" aria-label="Sudahsampai">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="2.5" y="2.5" width="19" height="19" rx="5" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M7.5 12.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="logo">sudah<b>sampai</b></span>
+        <span class="brand-parent">by Orbyte</span>
       </a>
       <nav class="nav">
         <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint == 'index' }}"><i data-lucide="layout-dashboard"></i> {{ t('nav.dashboard') }}</a>

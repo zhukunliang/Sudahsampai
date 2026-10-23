@@ -245,7 +245,18 @@
     "tag.credit": "Credit",
     "tag.ai": "Reply analysed",
     "tag.applied": "Update confirmed",
-    "tag.other": "Other"
+    "tag.other": "Other",
+    "intro.toggle": "How Sudahsampai works",
+    "intro.title": "Every supplier order, followed up — you only decide the exceptions.",
+    "intro.step1": "Orders tracked automatically",
+    "intro.step1_hint": "Reminders and chase messages go out on schedule.",
+    "intro.step2": "Supplier replies read by AI",
+    "intro.step2_hint": "Malay, Chinese or English — delays, short deliveries and price changes are spotted.",
+    "intro.step3": "You approve what matters",
+    "intro.step3_hint": "Nothing changes until you confirm.",
+    "hint.start_overdue": "Start here: a supplier hasn't replied about this order.",
+    "hint.start_other": "Start here: this order needs your decision.",
+    "hint.got_it": "Got it"
   },
   "ms": {
     "lang.label": "Bahasa",
@@ -493,7 +504,18 @@
     "tag.credit": "Credit",
     "tag.ai": "Reply analysed",
     "tag.applied": "Update confirmed",
-    "tag.other": "Other"
+    "tag.other": "Other",
+    "intro.toggle": "Cara Sudahsampai berfungsi",
+    "intro.title": "Setiap pesanan pembekal dipantau — anda hanya putuskan pengecualian.",
+    "intro.step1": "Pesanan dijejak secara automatik",
+    "intro.step1_hint": "Peringatan dan mesej susulan dihantar mengikut jadual.",
+    "intro.step2": "Balasan pembekal dibaca oleh AI",
+    "intro.step2_hint": "Bahasa Melayu, Cina atau Inggeris — kelewatan, kekurangan dan perubahan harga dikesan.",
+    "intro.step3": "Anda luluskan yang penting",
+    "intro.step3_hint": "Tiada apa berubah sehingga anda sahkan.",
+    "hint.start_overdue": "Mula di sini: pembekal belum membalas tentang pesanan ini.",
+    "hint.start_other": "Mula di sini: pesanan ini memerlukan keputusan anda.",
+    "hint.got_it": "Faham"
   },
   "zh": {
     "lang.label": "语言",
@@ -741,6 +763,17 @@
     "tag.credit": "扣点",
     "tag.ai": "回复解读",
     "tag.applied": "确认更新",
-    "tag.other": "其他"
+    "tag.other": "其他",
+    "intro.toggle": "Sudahsampai 怎么运作",
+    "intro.title": "每一张供应商订单都有人跟进——你只需要决定例外情况。",
+    "intro.step1": "订单自动跟踪",
+    "intro.step1_hint": "按时自动提醒、自动催货。",
+    "intro.step2": "AI 读懂供应商回复",
+    "intro.step2_hint": "马来文、中文、英文都行——延迟、少货、涨价都能识别。",
+    "intro.step3": "重要的事由你批准",
+    "intro.step3_hint": "你确认之前，订单不会被修改。",
+    "hint.start_overdue": "从这里开始：供应商还没有回复这张订单。",
+    "hint.start_other": "从这里开始：这张订单需要你来决定。",
+    "hint.got_it": "知道了"
   }
 }
