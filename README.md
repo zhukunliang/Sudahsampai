@@ -171,16 +171,23 @@ There are 36 tests in two files. They never call a real AI service and need no A
 
 ## How We Use RunPod
 
-<!-- TEAM: keep ONE of the two options below and delete the other (and this comment) before submitting. -->
+We tested RunPod as a candidate AI provider but did not choose it for the live demo.
 
-**Option (a) — RunPod used:** the AI step that reads supplier replies calls RunPod's public OpenAI-compatible endpoint for the model **GLM-5.3** (`glm-5.3`). The app reaches it through the same environment variables as any other provider (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, plus the optional `AI_MAX_TOKENS` and `AI_REASONING_EFFORT`), so no code is specific to RunPod. Usage is paid from the RunPod credits provided by the competition. Screenshots proving the usage are in `submission/`.
+**What we tested.** The AI step reaches any OpenAI-compatible API through environment variables (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, plus the optional `AI_MAX_TOKENS` and `AI_REASONING_EFFORT`), so no code is specific to one provider. We pointed it at RunPod's public endpoint for **GLM-5.3** (`glm-5.3`, max tokens 2000, reasoning effort `low`), paid from the RunPod credits provided by the competition, and ran `scripts/compare_models.py` against both providers on the same 6 synthetic supplier replies (simulated date 2026-10-21):
 
-**Option (b) — RunPod not used:** our project has no GPU workload. The AI step calls the hosted DeepSeek API. Because the AI connection is configured by environment variables, the same code can point to a RunPod endpoint without code changes, but we did not use one.
+| | DeepSeek (`deepseek-chat`) | RunPod (`glm-5.3`) |
+|---|---|---|
+| Answered by AI (no fallback to rules) | 6 / 6 | 6 / 6 |
+| Average time per reply | 1.12 s | 4.39 s |
+| Flagged for human check | 1 (the unclear reply) | 1 (the unclear reply) |
+| "Lori rosak. Jumaat baru boleh hantar, 12 kotak je dulu" (15 boxes ordered) | `partial`, 12 boxes, Friday | `delay`, 12 boxes, Friday |
+
+**Why we chose DeepSeek.** Both models handled the first five replies sensibly. On the last one, the supplier is both late *and* short; DeepSeek marked it as a partial delivery, while GLM-5.3 marked it only as a delay, which in our app would update the date but not warn the owner about the 3 missing boxes. DeepSeek was also about 4 times faster. This was a small test (6 replies, one run each), so it is not a general ranking of the two models. Switching to RunPod later only needs the Secrets changed; screenshots of the test are in `submission/`.
 
 ## Data & Privacy
 
 - **Synthetic data only.** All suppliers, phone numbers, orders and supplier replies in `data/seed_orders.json` and `data/sample_replies.json` are fictional; phone numbers use the placeholder pattern `+60 12-000 10xx`. No real customer or supplier data is collected or stored.
-- **What the AI service receives.** When a reply is analysed, the reply text and basic order details (item, quantity and unit, delivery date, supplier name) are sent to the DeepSeek API, whose servers are outside Malaysia. Supplier phone numbers are not sent. In the demo all of this is synthetic.
+- **What the AI service receives.** When a reply is analysed, the reply text and basic order details (item, quantity and unit, delivery date, supplier name) are sent to the DeepSeek API, whose servers are outside Malaysia. Supplier phone numbers are not sent. In the demo all of this is synthetic. The RunPod comparison test sent only the synthetic sample replies and one fictional order.
 - **For a real deployment**, supplier names and WhatsApp numbers can be personal data under Malaysia's Personal Data Protection Act 2010 (PDPA, as amended in 2024). A real deployment would need to:
   - tell suppliers what data is stored and why, and use it only for order follow-up (notice and choice, purpose limitation);
   - limit access by role and keep the activity log as an audit trail (security);
