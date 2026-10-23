@@ -97,6 +97,8 @@ Not yet built (planned): actually sending WhatsApp messages, and connecting to r
 ├── tests/
 │   ├── test_app.py         App tests (orders, receiving, permissions, fast-forward)
 │   └── test_ai_parser.py   AI parser tests (rule mode, validation, fallback)
+├── scripts/
+│   └── compare_models.py   Compare AI models on the sample supplier replies
 ├── docs/
 │   └── api.md              Module API and assumed Orbyte capabilities (all simulated)
 ├── submission/             Proposal, declaration, slides, proof of Replit use, video link
@@ -134,7 +136,9 @@ Then open http://localhost:5000. Optional environment variables:
 | `SECRET_KEY` | Signs the session cookie | A random key is generated at each start |
 | `AI_BASE_URL` | OpenAI-compatible API address, e.g. `https://api.deepseek.com` | Rule mode |
 | `AI_API_KEY` | API key for that service | Rule mode |
-| `AI_MODEL` | Model name, e.g. `deepseek-chat` | Rule mode |
+| `AI_MODEL` | Model name, e.g. `deepseek-chat` or `glm-5.3` | Rule mode |
+| `AI_MAX_TOKENS` | Maximum tokens the model may return; raise it for models that reason before answering | 400 |
+| `AI_REASONING_EFFORT` | e.g. `low`; only sent to the model when set | Not sent |
 
 Never put these values in the code or commit them.
 
@@ -167,7 +171,11 @@ There are 36 tests in two files. They never call a real AI service and need no A
 
 ## How We Use RunPod
 
-Not used: our project has no GPU workload. The AI step calls the hosted DeepSeek API. Because the AI connection is configured by environment variables, the same code could point to a self-hosted model (for example a RunPod Serverless vLLM endpoint) without code changes, but we have not deployed one.
+<!-- TEAM: keep ONE of the two options below and delete the other (and this comment) before submitting. -->
+
+**Option (a) — RunPod used:** the AI step that reads supplier replies calls RunPod's public OpenAI-compatible endpoint for the model **GLM-5.3** (`glm-5.3`). The app reaches it through the same environment variables as any other provider (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, plus the optional `AI_MAX_TOKENS` and `AI_REASONING_EFFORT`), so no code is specific to RunPod. Usage is paid from the RunPod credits provided by the competition. Screenshots proving the usage are in `submission/`.
+
+**Option (b) — RunPod not used:** our project has no GPU workload. The AI step calls the hosted DeepSeek API. Because the AI connection is configured by environment variables, the same code can point to a RunPod endpoint without code changes, but we did not use one.
 
 ## Data & Privacy
 

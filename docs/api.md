@@ -82,7 +82,24 @@ All calls go through `src/orbyte_adapter.py`. Each function is a **mock** today.
 
 Reminders, overdue notes, rule changes and discrepancy decisions are free.
 
-## 3. Assumptions and limits
+## 3. AI model used to read supplier replies
+
+The AI step (in `src/ai_parser.py`) calls any **OpenAI-compatible** chat API. Which service and model it uses is set only by environment variables (Replit Secrets), so switching between DeepSeek and RunPod needs no code change:
+
+| Variable | DeepSeek | RunPod public endpoint (GLM-5.3) |
+|----------|----------|----------------------------------|
+| `AI_BASE_URL` | `https://api.deepseek.com` | `https://api.runpod.ai/v2/<ENDPOINT_ID>/openai/v1` |
+| `AI_API_KEY` | DeepSeek API key | RunPod API key |
+| `AI_MODEL` | `deepseek-chat` | `glm-5.3` |
+| `AI_MAX_TOKENS` (optional) | not needed (default 400) | raise it if the model reasons before answering |
+| `AI_REASONING_EFFORT` (optional) | leave unset | e.g. `low` |
+
+- The page shows which model answered, e.g. "AI: deepseek-chat (DeepSeek)" or "AI: glm-5.3 (RunPod)". It never shows variable names, addresses or keys.
+- The app first asks for strict JSON Schema output and, if the service does not support it, falls back to plain JSON mode. Answers wrapped in a ```json code block or surrounded by extra text are unwrapped first; if no JSON object can be found, the result is marked "needs human check".
+- If the variables are missing, the request takes longer than 15 seconds, or the service returns an error, the app switches to offline keyword rules.
+- `scripts/compare_models.py` runs all sample replies against the currently configured model and prints intent, extracted values, confidence, time and whether a human check is needed, for side-by-side comparison.
+
+## 4. Assumptions and limits
 
 - The function names, parameters and return values are our design; they are not taken from any published Orbyte documentation.
 - No real WhatsApp messages are sent and no real money or credits are charged.

@@ -10,6 +10,7 @@ Deadline: **Sunday 25 October 2026, 7:59:59 AM MYT**, submitted once per team on
 | 3 | Pitch deck PDF (file name TBD) - must match the video | TBD |
 | 4 | `REPLIT_PROOF_OF_USE.pdf` - proof that Replit was used for development and deployment | TBD |
 | 5 | Pitch video (5-7 minutes, includes a live demo) - YouTube link below | TBD |
+| 6 | `RUNPOD_PROOF_OF_USE.pdf` - screenshots of RunPod usage (only if RunPod / GLM-5.3 is used) | TBD |
 
 ## Pitch Video
 
