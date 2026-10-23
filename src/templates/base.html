@@ -50,6 +50,7 @@
         <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint == 'index' }}"><i data-lucide="layout-dashboard"></i> {{ t('nav.dashboard') }}</a>
         <a href="{{ url_for('new_order') }}" class="{{ 'active' if request.endpoint == 'new_order' }}"><i data-lucide="plus-circle"></i> {{ t('nav.new_order') }}</a>
         <a href="{{ url_for('show_logs') }}" class="{{ 'active' if request.endpoint == 'show_logs' }}"><i data-lucide="history"></i> {{ t('nav.activity') }}</a>
+        <a href="{{ url_for('feedback') }}" class="{{ 'active' if request.endpoint == 'feedback' }}"><i data-lucide="message-circle-heart"></i> {{ t('nav.feedback') }}</a>
       </nav>
       <div class="topbar-right">
         <span class="credits" title="{{ t('topbar.credits_title') }}"><i data-lucide="coins"></i> {{ t('topbar.credits', n=credits_used) }}</span>

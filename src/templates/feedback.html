@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ t('feedback.title') }}</h1>
+    <p class="muted">{{ t('feedback.subtitle') }}</p>
+  </div>
+</div>
+
+{% if errors %}
+<div class="flash flash-error">
+  <i data-lucide="circle-alert"></i>
+  <div>
+    <b>{{ t('new.errors') }}</b>
+    <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  </div>
+</div>
+{% endif %}
+
+{# 不预先填任何内容：下拉框默认是"请选择"，单选框一个都不选。出错时只放回用户自己填的内容 #}
+<form method="post" class="card form-card narrow-form">
+  <div class="feedback-fields">
+    <div>
+      <label for="shop_type">{{ t('feedback.shop_type') }} *</label>
+      <select id="shop_type" name="shop_type">
+        <option value="">{{ t('feedback.choose') }}</option>
+        {% for code in shop_types %}
+        <option value="{{ code }}" {% if form.shop_type == code %}selected{% endif %}>{{ t('feedback.shop.' ~ code) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div>
+      <label for="hours_per_week">{{ t('feedback.hours') }} *</label>
+      <input type="number" id="hours_per_week" name="hours_per_week" min="0" max="168" step="0.5"
+             inputmode="decimal" value="{{ form.hours_per_week or '' }}">
+    </div>
+
+    <div>
+      <label for="most_useful">{{ t('feedback.most_useful') }} *</label>
+      <select id="most_useful" name="most_useful">
+        <option value="">{{ t('feedback.choose') }}</option>
+        {% for code in features %}
+        <option value="{{ code }}" {% if form.most_useful == code %}selected{% endif %}>{{ t('feedback.feature.' ~ code) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div>
+      <label for="improve">{{ t('feedback.improve') }}</label>
+      <textarea id="improve" name="improve" rows="4" maxlength="1000">{{ form.improve or '' }}</textarea>
+    </div>
+
+    <fieldset class="choice-group">
+      <legend>{{ t('feedback.pay') }} *</legend>
+      {% for code in pay_choices %}
+      <label class="check">
+        <input type="radio" name="willing_to_pay" value="{{ code }}" {% if form.willing_to_pay == code %}checked{% endif %}>
+        {{ t('feedback.pay.' ~ code) }}
+      </label>
+      {% endfor %}
+    </fieldset>
+
+    <p class="muted small"><i data-lucide="shield-check"></i> {{ t('feedback.privacy') }}</p>
+  </div>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary"><i data-lucide="send"></i> {{ t('feedback.submit') }}</button>
+  </div>
+</form>
+{% endblock %}

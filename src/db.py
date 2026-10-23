@@ -60,6 +60,7 @@ ACTION_TAGS = {
     "auto_applied": ("tag.auto", "teal"),
     "auto_undone": ("tag.undo", "gray"),
     "reply_sent": ("tag.reply_sent", "blue"),
+    "feedback_submitted": ("tag.feedback", "blue"),
 }
 OTHER_TAG = ("tag.other", "gray")
 
@@ -94,6 +95,18 @@ CREATE TABLE IF NOT EXISTS logs (
     detail TEXT NOT NULL,                -- 内容
     order_id INTEGER,                    -- 跟哪张订单有关；和订单无关的日志为空
     amount REAL                          -- 这件事避免的损失（RM）：少收的货值、涨价的差额；没有就为空
+);
+
+-- 用户反馈（/feedback 页面）。不收集姓名、电话等个人信息。
+-- 这是真实用户的调研数据，不是演示数据：重置演示数据时不清空，也不预先填任何内容。
+CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submitted_at TEXT NOT NULL,          -- 真实时间（马来西亚时间）YYYY-MM-DD HH:MM:SS
+    shop_type TEXT NOT NULL,             -- 店铺类型代码，见 app.py 的 SHOP_TYPES
+    hours_per_week REAL NOT NULL,        -- 每周跟进供应商大约多少小时
+    most_useful TEXT NOT NULL,           -- 最有用的功能代码，见 app.py 的 FEATURES
+    improve TEXT NOT NULL DEFAULT '',    -- 最想改进的地方（可以不填）
+    willing_to_pay TEXT NOT NULL         -- 愿不愿意每月付费：yes / maybe / no
 );
 """
 

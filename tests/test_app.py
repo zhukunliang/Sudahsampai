@@ -46,6 +46,7 @@ class AppTestCase(unittest.TestCase):
         with db.connect() as conn:
             conn.execute("DELETE FROM orders")
             conn.execute("DELETE FROM logs")
+            conn.execute("DELETE FROM feedback")
             conn.execute("DELETE FROM sqlite_sequence")
         db.set_today(db.DEMO_START)
         self.client = app.test_client()
@@ -312,6 +313,63 @@ class AutoApplyTest(AppTestCase):
         order_id = self.add_order()
         self.client.post(f"/orders/{order_id}/reply/send", data={"message": "   "})
         self.assertEqual(self.logs("reply_sent"), [])
+
+
+class FeedbackTest(AppTestCase):
+    """/feedback 页面：不预先填任何内容；填好才保存，并写日志。"""
+
+    GOOD = {"shop_type": "grocery", "hours_per_week": "3.5", "most_useful": "ai_reading",
+            "improve": "Show supplier on-time rate", "willing_to_pay": "maybe"}
+
+    def feedback_rows(self):
+        with db.connect() as conn:
+            return conn.execute("SELECT * FROM feedback ORDER BY id").fetchall()
+
+    def test_form_starts_empty(self):
+        page = self.client.get("/feedback").get_data(as_text=True)
+        self.assertNotIn("selected", page)   # 下拉框没有预先选好的
+        self.assertNotIn("checked", page)    # 单选框一个都没选
+        self.assertRegex(page, r'name="hours_per_week"[^>]*value=""')  # 小时数是空的
+        self.assertEqual(self.feedback_rows(), [])  # 数据库里也没有预先填的数据
+
+    def test_valid_feedback_is_saved_and_logged(self):
+        response = self.client.post("/feedback", data=self.GOOD)
+        self.assertEqual(response.status_code, 302)
+        rows = self.feedback_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["shop_type"], rows[0]["hours_per_week"], rows[0]["most_useful"],
+                          rows[0]["improve"], rows[0]["willing_to_pay"]),
+                         ("grocery", 3.5, "ai_reading", "Show supplier on-time rate", "maybe"))
+        log = self.logs("feedback_submitted")
+        self.assertEqual(len(log), 1)
+        self.assertIn("3.5 hour(s) a week", log[0]["detail"])
+
+    def test_improvement_is_optional(self):
+        self.client.post("/feedback", data=dict(self.GOOD, improve=""))
+        self.assertEqual(len(self.feedback_rows()), 1)
+
+    def test_invalid_feedback_is_not_saved(self):
+        cases = {
+            "no shop type": dict(self.GOOD, shop_type=""),
+            "made-up shop type": dict(self.GOOD, shop_type="casino"),
+            "negative hours": dict(self.GOOD, hours_per_week="-1"),
+            "too many hours": dict(self.GOOD, hours_per_week="200"),
+            "hours not a number": dict(self.GOOD, hours_per_week="a lot"),
+            "no feature": dict(self.GOOD, most_useful=""),
+            "no pay answer": dict(self.GOOD, willing_to_pay=""),
+            "text too long": dict(self.GOOD, improve="x" * 1001),
+        }
+        for name, data in cases.items():
+            with self.subTest(name):
+                response = self.client.post("/feedback", data=data)
+                self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.feedback_rows(), [])
+        self.assertEqual(self.logs("feedback_submitted"), [])
+
+    def test_demo_reset_keeps_feedback(self):
+        self.client.post("/feedback", data=self.GOOD)
+        self.client.post("/reset")  # 默认是店主
+        self.assertEqual(len(self.feedback_rows()), 1)
 
 
 if __name__ == "__main__":

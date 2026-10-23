@@ -64,6 +64,7 @@ Other features:
 - Same order is not reminded or chased twice on the same day.
 - Summary of triggered events on the home page after each fast-forward.
 - Owner-only "Reset demo data" button that reloads the synthetic data and sets the date back to 2026-10-21.
+- `/feedback` page (link in the top navigation): five questions for shop owners — shop type, hours a week spent following up suppliers, most useful feature, what to improve (optional) and whether they would pay monthly. Nothing is pre-filled; answers are saved in the `feedback` table and logged as `feedback_submitted`. Resetting the demo data does not delete feedback.
 - Orbyte interface layer (`src/orbyte_adapter.py`): current user, supplier contacts, messaging, approvals, credit wallet and audit log all go through six functions. **All of them are simulated** today, based on our own assumptions about Orbyte's APIs; see [docs/api.md](docs/api.md).
 - Simulated Orbyte credits: 1 credit per automatic chase and per delivery check, shown in the page corner.
 - `POST /api/delivery-check`: the delivery check as a JSON API for other modules ([docs/api.md](docs/api.md)).
@@ -163,7 +164,7 @@ python -m unittest discover tests
 
 There are 36 tests in two files. They never call a real AI service and need no API key.
 
-- `tests/test_app.py` uses a temporary database and simulated-date file (via the `SDC_DB_PATH` and `SDC_SIM_PATH` environment variables) and deletes them afterwards, so `data/sdc.db` is never touched. It covers: rejecting a zero quantity, matching and mismatched deliveries, staff being blocked from owner-only actions, auto-chase on overdue orders without duplicates on the same day, low-risk updates applied automatically, risky ones left for the owner, undo (owner only, refused once the order has changed), and sending a reply draft.
+- `tests/test_app.py` uses a temporary database and simulated-date file (via the `SDC_DB_PATH` and `SDC_SIM_PATH` environment variables) and deletes them afterwards, so `data/sdc.db` is never touched. It covers: rejecting a zero quantity, matching and mismatched deliveries, staff being blocked from owner-only actions, auto-chase on overdue orders without duplicates on the same day, low-risk updates applied automatically, risky ones left for the owner, undo (owner only, refused once the order has changed), sending a reply draft, and the feedback form (empty at start, saved only when valid, kept after a demo reset).
 - `tests/test_ai_parser.py` covers the rule mode on every sample reply and on mixed messages such as *"Jumaat baru boleh hantar, 12 kotak je dulu"* (delay + partial: 12 boxes, next Friday), the rule that "confirm" is only chosen when no delay, partial or price signal is present, server-side validation of bad AI results, and falling back to rule mode when the AI times out or fails.
 
 ## How We Use Replit
@@ -189,7 +190,7 @@ We tested RunPod as a candidate AI provider but did not choose it for the live d
 
 ## Data & Privacy
 
-- **Synthetic data only.** All suppliers, phone numbers, orders and supplier replies in `data/seed_orders.json` and `data/sample_replies.json` are fictional; phone numbers use the placeholder pattern `+60 12-000 10xx`. No real customer or supplier data is collected or stored.
+- **Synthetic data only.** All suppliers, phone numbers, orders and supplier replies in `data/seed_orders.json` and `data/sample_replies.json` are fictional; phone numbers use the placeholder pattern `+60 12-000 10xx`. No real customer or supplier data is collected or stored. The only real input is the anonymous `/feedback` form, which asks for no name, phone number or other contact details.
 - **What the AI service receives (redacted before sending).** The DeepSeek API's servers are outside Malaysia, so the app sends only what is needed to read the reply: the reply text, the item name, the ordered quantity and unit, the planned delivery date and the simulated date. The supplier's name, phone number and the order number are **not** sent. Before sending, `redact()` in `src/ai_parser.py` replaces phone numbers, email addresses, names with a title (e.g. "Encik Ali", "Mr Tan") and the supplier's name inside the reply text with `[REDACTED]`. The activity log records each time a reply was sent redacted and how many items were hidden. The original reply stays only in the local database. Offline rule mode runs locally and sends nothing.
 - **Limits of redaction.** It is pattern-based: names written without a title (e.g. "Ali said ok") or in Chinese characters are not detected. In the demo all data is synthetic. The RunPod comparison test sent only the synthetic sample replies and one fictional order.
 - **For a real deployment**, supplier names and WhatsApp numbers can be personal data under Malaysia's Personal Data Protection Act 2010 (PDPA, as amended in 2024). A real deployment would need to:

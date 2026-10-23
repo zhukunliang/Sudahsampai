@@ -1,7 +1,7 @@
 import json
 import os
 import secrets
-from datetime import date
+from datetime import date, datetime
 from functools import wraps
 from urllib.parse import urlparse
 
@@ -304,6 +304,71 @@ def new_order():
                            f"from {data['supplier'] or '(no supplier)'}, delivery {data['delivery_date']}", order_id)
     flash(t("flash.created", id=order_id), "ok")
     return redirect(url_for("index"))
+
+
+# ---------- 用户反馈 ----------
+
+# 选项都存英文代码，页面上用 locales.json 里的 feedback.<代码> 翻译
+SHOP_TYPES = ("grocery", "food", "bakery", "hardware", "pharmacy", "other")
+FEATURES = ("reminders", "ai_reading", "delivery_check", "auto_apply", "reply_draft", "activity_log")
+PAY_CHOICES = ("yes", "maybe", "no")
+MAX_HOURS_PER_WEEK = 168  # 一周最多 168 小时
+MAX_IMPROVE_LENGTH = 1000
+
+
+def validate_feedback(form):
+    """检查反馈表单，返回 (整理好的数据, 错误列表)。除了"最想改进的地方"，每一项都必须填。"""
+    data = {
+        "shop_type": form.get("shop_type", ""),
+        "hours_per_week": form.get("hours_per_week", "").strip(),
+        "most_useful": form.get("most_useful", ""),
+        "improve": form.get("improve", "").strip(),
+        "willing_to_pay": form.get("willing_to_pay", ""),
+    }
+    errors = []
+    if data["shop_type"] not in SHOP_TYPES:
+        errors.append(t("feedback.err_shop"))
+    try:
+        hours = float(data["hours_per_week"])
+        if not 0 <= hours <= MAX_HOURS_PER_WEEK:
+            raise ValueError
+    except ValueError:
+        errors.append(t("feedback.err_hours", max=MAX_HOURS_PER_WEEK))
+    if data["most_useful"] not in FEATURES:
+        errors.append(t("feedback.err_feature"))
+    if len(data["improve"]) > MAX_IMPROVE_LENGTH:
+        errors.append(t("feedback.err_improve", max=MAX_IMPROVE_LENGTH))
+    if data["willing_to_pay"] not in PAY_CHOICES:
+        errors.append(t("feedback.err_pay"))
+    return data, errors
+
+
+@app.route("/feedback", methods=["GET", "POST"])
+def feedback():
+    """反馈表单：任何角色都可以填。提交后存进 feedback 表，并写一条日志。表单不预先填任何内容。"""
+    choices = {"shop_types": SHOP_TYPES, "features": FEATURES, "pay_choices": PAY_CHOICES}
+    if request.method == "GET":
+        return render_template("feedback.html", form={}, errors=[], **choices)
+
+    data, errors = validate_feedback(request.form)
+    if errors:
+        # 出错时把用户自己填的内容原样放回去，不用重新填
+        return render_template("feedback.html", form=data, errors=errors, **choices), 400
+
+    with db.connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO feedback (submitted_at, shop_type, hours_per_week, most_useful, improve, willing_to_pay)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (datetime.now(db.MALAYSIA_TZ).strftime("%Y-%m-%d %H:%M:%S"), data["shop_type"],
+             float(data["hours_per_week"]), data["most_useful"], data["improve"], data["willing_to_pay"]))
+        detail = (f"Feedback #{cur.lastrowid}: shop type {data['shop_type']}, "
+                  f"{float(data['hours_per_week']):g} hour(s) a week following up suppliers, "
+                  f"most useful: {data['most_useful']}, willing to pay monthly: {data['willing_to_pay']}")
+        if data["improve"]:
+            detail += f', wants improved: "{data["improve"][:200]}"'
+        orbyte.write_audit(conn, "feedback_submitted", detail)
+    flash(t("feedback.thanks"), "ok")
+    return redirect(url_for("feedback"))
 
 
 # ---------- 订单详情 ----------
