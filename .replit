@@ -1,13 +1,13 @@
 modules = ["python-3.12"]
-run = "pip install -r requirements.txt && python src/app.py"
+run = "python -m venv .venv && PIP_USER=0 .venv/bin/pip install -q -r requirements.txt && .venv/bin/python src/app.py"
 
 [nix]
 channel = "stable-25_05"
 
 [deployment]
 deploymentTarget = "vm"
-build = ["pip", "install", "-r", "requirements.txt"]
-run = ["python", "src/app.py"]
+build = ["sh", "-c", "python -m venv .venv && PIP_USER=0 .venv/bin/pip install -r requirements.txt"]
+run = [".venv/bin/python", "src/app.py"]
 ignorePorts = false
 
 [[ports]]
