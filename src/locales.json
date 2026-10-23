@@ -309,7 +309,10 @@
     "feedback.err_feature": "Please choose the most useful feature.",
     "feedback.err_improve": "Please keep your suggestion under {max} characters.",
     "feedback.err_pay": "Please say whether you would pay monthly.",
-    "tag.feedback": "Feedback"
+    "tag.feedback": "Feedback",
+    "restock.sent_title": "Restock request sent to the supplier",
+    "restock.sent_hint": "Sent via Orbyte Connect (simulated). Waiting for the supplier to confirm a date.",
+    "tag.restock_sent": "Restock request"
   },
   "ms": {
     "lang.label": "Bahasa",
@@ -621,7 +624,10 @@
     "feedback.err_feature": "Sila pilih ciri yang paling berguna.",
     "feedback.err_improve": "Sila pastikan cadangan anda kurang daripada {max} aksara.",
     "feedback.err_pay": "Sila nyatakan sama ada anda sanggup membayar bulanan.",
-    "tag.feedback": "Maklum balas"
+    "tag.feedback": "Maklum balas",
+    "restock.sent_title": "Permintaan tambah stok dihantar kepada pembekal",
+    "restock.sent_hint": "Dihantar melalui Orbyte Connect (simulasi). Menunggu pembekal mengesahkan tarikh.",
+    "tag.restock_sent": "Permintaan stok"
   },
   "zh": {
     "lang.label": "语言",
@@ -933,6 +939,9 @@
     "feedback.err_feature": "请选择最有用的功能。",
     "feedback.err_improve": "建议请控制在 {max} 个字以内。",
     "feedback.err_pay": "请选择是否愿意每月付费。",
-    "tag.feedback": "反馈"
+    "tag.feedback": "反馈",
+    "restock.sent_title": "已向供应商发送补货请求",
+    "restock.sent_hint": "已通过 Orbyte Connect 发送（模拟），等供应商确认补货日期。",
+    "tag.restock_sent": "补货请求"
   }
 }

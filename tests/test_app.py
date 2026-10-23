@@ -315,6 +315,40 @@ class AutoApplyTest(AppTestCase):
         self.assertEqual(self.logs("reply_sent"), [])
 
 
+class RestockRequestTest(AppTestCase):
+    """店主选"要求补货"：改状态，并给供应商发一条写明数量的补货请求（没有 AI 时用模板）。"""
+
+    def test_restock_sends_a_bilingual_request_and_shows_it(self):
+        order_id = self.add_order(product="Fresh milk 1L", quantity=48, unit="bottles", status=db.DISCREPANCY,
+                                  received_quantity=44, received_at="2026-10-20", on_time=0)
+        no_ai = {name: "" for name in ai_parser.AI_ENV_VARS}
+        with mock.patch.dict(os.environ, no_ai):
+            self.client.post(f"/orders/{order_id}/resolve", data={"choice": "restock"})
+
+        self.assertEqual(self.get_order(order_id)["status"], db.RESTOCK_REQUESTED)
+        sent = self.logs("restock_message")
+        self.assertEqual(len(sent), 1)
+        detail = sent[0]["detail"]
+        self.assertIn("+60 12-000 1002", detail)                       # 发给这张订单的供应商（模拟）
+        for text in ("ordered 48 bottles of Fresh milk 1L", "received only 44 bottles", "4 bottles are missing",
+                     "confirm the date",                                # 英文：商品、订购、实收、缺多少、请确认日期
+                     "kurang 4 bottles", "sahkan tarikh"):              # 马来文
+            self.assertIn(text, detail)
+
+        page = self.client.get(f"/orders/{order_id}").get_data(as_text=True)
+        self.assertIn("Restock request sent to the supplier", page)
+        self.assertIn("4 bottles are missing", page)                   # 页面上显示发出的内容
+
+    def test_ai_request_with_wrong_numbers_falls_back_to_template(self):
+        order = {"product": "Fresh milk 1L", "quantity": 48, "unit": "bottles", "received_quantity": 44}
+        wrong = {"en": "Please send 5 more bottles.", "ms": "Tolong hantar 5 botol lagi."}  # 缺的是 4，不是 5
+        with mock.patch.dict(os.environ, AutoApplyTest.FAKE_AI_ENV), \
+             mock.patch.object(ai_parser, "_call_restock_model", lambda *a: wrong):
+            request_msg = ai_parser.restock_request(order)
+        self.assertEqual(request_msg["mode"], "template")
+        self.assertIn("4 bottles are missing", request_msg["text"])
+
+
 class FeedbackTest(AppTestCase):
     """/feedback 页面：不预先填任何内容；填好才保存，并写日志。"""
 

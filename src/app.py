@@ -409,9 +409,10 @@ def render_detail(conn, order_row, analysis=None, reply_text="", status=200):
     """渲染订单详情页。analysis 是刚做完的回复分析结果（没有就不显示）。"""
     logs = db.get_logs(conn, order_row["id"])  # 页面底部显示这张订单自己的日志
     o = decorate(order_row)
+    restock_msg = last_restock_message(logs) if o["status"] == db.RESTOCK_REQUESTED else None
     return render_template("detail.html", o=o, logs=logs, timeline=build_timeline(o, logs),
                            analysis=analysis, reply_text=reply_text, samples=load_sample_replies(),
-                           diff_label=diff_label), status
+                           diff_label=diff_label, restock_msg=restock_msg), status
 
 
 def load_sample_replies():
@@ -809,6 +810,28 @@ RESOLUTIONS = {
 }
 
 
+RESTOCK_SEPARATOR = "\n\n---\n"  # 日志里说明和消息全文之间的分隔，页面靠它把消息取出来显示
+
+
+def send_restock_request(conn, o):
+    """写一条补货请求（英文 + 马来文），通过 Orbyte Connect 模拟发给供应商，并把全文写进日志。
+    店主点了按钮才会发，所以不扣 credit（和手动回复一样，只有系统自动发的催货消息才扣）。"""
+    request_msg = ai_parser.restock_request(o)
+    contact = orbyte.get_supplier_contact(o)
+    receipt = orbyte.send_message(contact, request_msg["text"])
+    orbyte.write_audit(conn, "restock_message",
+                       f"#{o['id']} Restock request sent via Orbyte Connect to WhatsApp {receipt['to'] or '(none)'} "
+                       f"(simulated, written by {request_msg['note']}):{RESTOCK_SEPARATOR}{request_msg['text']}", o["id"])
+
+
+def last_restock_message(logs):
+    """这张订单最近一次发出的补货请求全文（页面显示用）；没有就是 None。logs 是新的在前。"""
+    for log in logs:
+        if log["action"] == "restock_message" and RESTOCK_SEPARATOR in log["detail"]:
+            return log["detail"].split(RESTOCK_SEPARATOR, 1)[1]
+    return None
+
+
 @app.route("/orders/<int:order_id>/resolve", methods=["POST"])
 @owner_required("action.resolve")
 def resolve(order_id):
@@ -826,6 +849,9 @@ def resolve(order_id):
         conn.execute("UPDATE orders SET status = ? WHERE id = ?", (new_status, order_id))
         text = describe_diff(o["quantity"], o["received_quantity"], o["unit"], o["unit_price"])
         orbyte.write_audit(conn, action, f"#{order_id} {o['product']} ({text}): owner {label}", order_id)
+        # 要求补货、而且确实少收了：给供应商发一条补货请求（多收时不需要补货，不发）
+        if choice == "restock" and o["received_quantity"] < o["quantity"]:
+            send_restock_request(conn, o)
     flash(t(message), "ok")
     return redirect(url_for("order_detail", order_id=order_id))
 

@@ -61,6 +61,7 @@ ACTION_TAGS = {
     "auto_undone": ("tag.undo", "gray"),
     "reply_sent": ("tag.reply_sent", "blue"),
     "feedback_submitted": ("tag.feedback", "blue"),
+    "restock_message": ("tag.restock_sent", "orange"),
 }
 OTHER_TAG = ("tag.other", "gray")
 

@@ -162,6 +162,14 @@
     {% endif %}
 
     {% if o.status in db.ISSUES %}
+      {# 已经要求补货：显示发给供应商的补货请求全文 #}
+      {% if restock_msg %}
+      <section class="card action-card">
+        <h3><i data-lucide="send"></i> {{ t('restock.sent_title') }}</h3>
+        <p class="muted small">{{ t('restock.sent_hint') }}</p>
+        <div class="message">{{ restock_msg }}</div>
+      </section>
+      {% endif %}
       {# 有差异：只有店主能处理的三个按钮 #}
       <section class="card action-card action-urgent">
         <h3><i data-lucide="scale"></i> {{ t('next.resolve_title') }}</h3>

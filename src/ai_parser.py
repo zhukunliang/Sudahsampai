@@ -353,6 +353,58 @@ def template_reply(result, order):
     return f"{en}\n\n{ms}"
 
 
+# ---------- 补货请求（店主选"要求供应商补货"时发给供应商） ----------
+
+RESTOCK_PROMPT = """You write a short, polite WhatsApp message from a small shop in Malaysia to its supplier,
+asking them to send the missing items of a delivery. Write it in English and in Malay (Bahasa Melayu),
+2-3 short sentences each. Mention the item, the quantity ordered, the quantity received and how many are
+missing, and ask the supplier to confirm when they can send the rest. Use exactly the numbers given.
+Do not invent names, dates or prices. Reply with one JSON object only: {"en": "...", "ms": "..."}"""
+
+
+def restock_request(order):
+    """写一条补货请求（英文 + 马来文）：商品、订购数量、实收数量、缺多少，请供应商确认补货日期。
+    有 AI 时让 AI 写，只发商品和数量（没有供应商名字、电话，也没有自由文本，所以不需要脱敏）；
+    没有 AI、出错或写得不合格（比如数字不对）时用模板。返回 {"text", "mode", "note"}，和 draft_reply 一样。"""
+    short = order["quantity"] - order["received_quantity"]
+    if all(os.environ.get(name) for name in AI_ENV_VARS):
+        try:
+            draft = _call_restock_model(order, short)
+            en, ms = draft.get("en"), draft.get("ms")
+            if (all(isinstance(v, str) and 0 < len(v.strip()) <= MAX_DRAFT_LENGTH for v in (en, ms))
+                    and str(short) in en and str(short) in ms):  # 缺多少一定要写对，写错就用模板
+                return {"text": f"{en.strip()}\n\n{ms.strip()}", "mode": "ai", "note": ai_label()}
+        except Exception:
+            pass
+    return {"text": template_restock(order, short), "mode": "template", "note": "Template"}
+
+
+def _call_restock_model(order, short):
+    user_message = (f"Item: {order['product']}\nOrdered: {order['quantity']} {order['unit']}\n"
+                    f"Received: {order['received_quantity']} {order['unit']}\nMissing: {short} {order['unit']}")
+    response = _client().chat.completions.create(
+        model=os.environ["AI_MODEL"],
+        messages=[{"role": "system", "content": RESTOCK_PROMPT}, {"role": "user", "content": user_message}],
+        response_format={"type": "json_object"},
+        temperature=0.3,
+        max_tokens=max_tokens_setting(),
+    )
+    return extract_json(response.choices[0].message.content) or {}
+
+
+def template_restock(order, short):
+    """没有 AI 时的补货请求模板。"""
+    product, unit = order["product"], order["unit"] or "units"
+    ordered, received = order["quantity"], order["received_quantity"]
+    en = (f"Hi, we ordered {ordered} {unit} of {product} but received only {received} {unit}, "
+          f"so {short} {unit} are missing. Could you please send the remaining {short} {unit} "
+          f"and confirm the date you can deliver them? Thank you.")
+    ms = (f"Hai, kami pesan {ordered} {unit} {product} tetapi hanya terima {received} {unit}, "
+          f"jadi kurang {short} {unit}. Boleh tolong hantar baki {short} {unit} "
+          f"dan sahkan tarikh boleh hantar? Terima kasih.")
+    return f"{en}\n\n{ms}"
+
+
 # ---------- 后端校验（AI 和规则的结果都要过这一关） ----------
 
 def validate(raw):

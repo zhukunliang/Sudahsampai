@@ -88,6 +88,7 @@ All calls go through `src/orbyte_adapter.py`. Each function is a **mock** today.
 | Each automatic chase message to a supplier | 1 |
 | Each delivery check (web form or `POST /api/delivery-check`) | 1 |
 | A reply sent by a person from the draft | 0 (assumption: manual replies are free; only automatic messages are charged) |
+| A restock request sent when the owner chooses "Ask supplier to restock" | 0 (same assumption: the owner triggered it) |
 
 Reminders, overdue notes, rule changes and discrepancy decisions are free.
 
