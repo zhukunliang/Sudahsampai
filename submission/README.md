@@ -5,8 +5,8 @@ Deadline: **Sunday 25 October 2026, 7:59:59 AM MYT**, submitted once per team on
 
 | # | File | Where |
 |---|------|-------|
-| 1 | `SDC2026_200OKFOUND_Preliminary.pdf` — preliminary proposal | Submitted on sdchack.my only (contains contact details) |
-| 2 | `SDC2026_200OKFOUND_TechDeclaration.pdf` — technology & tools declaration | Submitted on sdchack.my only (contains contact details) |
+| 1 | [`SDC2026_200OKFOUND_Preliminary.pdf`](SDC2026_200OKFOUND_Preliminary.pdf) — preliminary proposal | This folder |
+| 2 | [`SDC2026_200OKFOUND_TechDeclaration.pdf`](SDC2026_200OKFOUND_TechDeclaration.pdf) — technology & tools declaration | This folder |
 | 3 | [`SDC2026_200OKFOUND_PitchDeck.pdf`](SDC2026_200OKFOUND_PitchDeck.pdf) — slide deck | This folder |
 | 4 | [`SDC2026_200OKFOUND_Replit_POU.pdf`](SDC2026_200OKFOUND_Replit_POU.pdf) — Replit proof of use | This folder |
 | 5 | [`SDC2026_200OKFOUND_Runpod_POU.pdf`](SDC2026_200OKFOUND_Runpod_POU.pdf) — RunPod proof of use (model comparison test) | This folder |

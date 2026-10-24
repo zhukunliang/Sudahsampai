@@ -109,6 +109,8 @@ All of these are **simulated** today, based on our own assumptions about Orbyte'
 │   └── api.md                Module API and assumed Orbyte capabilities (all simulated)
 ├── submission/
 │   ├── README.md                                  List of submission files
+│   ├── SDC2026_200OKFOUND_Preliminary.pdf         Preliminary proposal
+│   ├── SDC2026_200OKFOUND_TechDeclaration.pdf     Technology & tools declaration
 │   ├── SDC2026_200OKFOUND_Replit_POU.pdf          Replit proof of use
 │   ├── SDC2026_200OKFOUND_Runpod_POU.pdf          RunPod proof of use
 │   └── SDC2026_200OKFOUND_PitchDeck.pdf           Slide deck
@@ -118,8 +120,6 @@ All of these are **simulated** today, based on our own assumptions about Orbyte'
 ```
 
 `data/sdc.db` (the SQLite database) and `data/sim_state.json` (current simulated date) are created at runtime and are not committed.
-
-The preliminary proposal (`SDC2026_200OKFOUND_Preliminary.pdf`) and the Technology & Tools Declaration (`SDC2026_200OKFOUND_TechDeclaration.pdf`) are submitted on sdchack.my and are not in this public repository, because they contain the team leader's contact details.
 
 ### Architecture
 
@@ -219,7 +219,7 @@ python -m unittest discover tests
 
 ## How We Use RunPod (Required)
 
-Our project does not need a GPU. We used a RunPod public endpoint for **GLM-5.3**, paid with the competition credits, to compare it against DeepSeek on the same 6 synthetic supplier replies with `scripts/compare_models.py`:
+Our project does not need a GPU. We used a RunPod public endpoint for **GLM-5.3**, paid with the US$25 competition credits, to compare it against DeepSeek on the same 6 synthetic supplier replies with `scripts/compare_models.py`:
 
 | | DeepSeek (`deepseek-chat`) | RunPod (`glm-5.3`) |
 |---|---|---|
@@ -270,7 +270,7 @@ After mentoring on 23 Oct 2026 with mentor Fadli Khalid, we:
 
 ## AI Tools Disclosure
 
-Claude Code and Claude chat assisted with code and reviews under the team's direction. ChatGPT and Doubao assisted with slides and text. The full list is in the Technology & Tools Declaration (submitted on sdchack.my).
+Claude Code and Claude chat assisted with code and reviews under the team's direction. ChatGPT and Doubao assisted with slides and text. The full list is in the [Technology & Tools Declaration](submission/SDC2026_200OKFOUND_TechDeclaration.pdf).
 
 ## Submission Checklist
 
@@ -278,7 +278,7 @@ Claude Code and Claude chat assisted with code and reviews under the team's dire
 - [x] Slide deck and demo video links added
 - [x] Replit used, proof in `submission/`
 - [x] RunPod used (comparison test only), proof in `submission/`
-- [x] Preliminary proposal and Tech Declaration submitted on sdchack.my (not in the public repo: they contain contact details)
+- [x] Preliminary proposal and Tech Declaration in `submission/` (phone number removed in the public copy; full versions on sdchack.my)
 - [x] "How to Run" steps verified
 - [x] No API keys or secrets committed
 - [x] Apache License 2.0 included
