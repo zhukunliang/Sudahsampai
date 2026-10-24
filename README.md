@@ -1,161 +1,198 @@
 # Sudahsampai
 
-**Sudahsampai** ("Has it arrived?") is a purchase follow-up web app for Malaysian micro and small businesses: it tracks supplier orders, reminds the owner before delivery dates, drafts polite supplier chase messages when an order is overdue, reads mixed-language supplier replies with AI, checks delivered quantities, and keeps every action in an activity log.
+Sudahsampai reads supplier replies in Malay, Chinese and English, flags delays and short deliveries, and asks the owner to approve anything important — so micro SMEs stop chasing suppliers by hand.
 
 ## Team Information
 
 | Item | Details |
 |------|---------|
-| Team Name | Sudahsampai |
-| Team Domain | Domain 2 - Orbyte Smart SME Challenge |
-| SDG | SDG 8 - Decent Work and Economic Growth |
+| Team Name | 200 OK FOUND |
+| Domain | Domain 2 — Orbyte Smart SME Challenge: Less Busywork, Better Business (Alpha Red Solutions Sdn Bhd) |
+| SDG Track | SDG 8 — Decent Work and Economic Growth (targets 8.2, 8.3) |
 | Team Leader | Zhu Kunliang |
 | University | Xiamen University Malaysia |
 | Members | 4 |
 
 ## Links
 
-| Item | Link |
-|------|------|
+| Resource | Link |
+|---|---|
+| GitHub Repository | https://github.com/zhukunliang/Sudahsampai |
 | Live Demo | https://sudahsampai.replit.app |
-| GitHub | https://github.com/zhukunliang/Sudahsampai |
-| Slides | TBD |
-| Video | TBD |
+| RunPod Endpoint | Not used by the live app. A RunPod public endpoint (GLM-5.3) was used only for a one-off model comparison (`scripts/compare_models.py`); see [Runpod proof of use](submission/SDC2026_200OKFOUND_Runpod_POU.pdf) |
+| Slide Deck | [SDC2026_200OKFOUND_PitchDeck.pdf](submission/SDC2026_200OKFOUND_PitchDeck.pdf) |
+| Demo Video | https://youtu.be/iuXjIcDRGIM |
 
-## Problem
+## Overview
 
-Many micro and small businesses in Malaysia order stock from several suppliers and follow up through WhatsApp, paper notes and memory. Delivery dates are easy to forget, late orders are noticed only when the shelf is empty, someone has to remember to chase the supplier, and short or extra deliveries are often not checked or recorded. There is no single place that shows which orders are due, late or wrong, or who did what.
+### Problem
 
-Measured impact on SMEs (time spent on follow-ups, frequency of late or short deliveries): TBD.
+Micro SME owners in Malaysia order stock from several suppliers and follow up by hand over WhatsApp, in a mix of Malay, Chinese and English. Delivery dates are easy to forget, late orders are noticed only when the shelf is empty, and short deliveries are often not checked or recorded. Each missed delay or missing box costs the shop money, and there is no single place that shows which orders need attention.
 
-## Solution
+### Solution
 
-Sudahsampai keeps every supplier order in one place and runs a small, explainable rule engine on top of it. Each simulated day, it checks every open order, reminds the owner when a delivery is near, marks late orders as overdue and drafts a polite English + Malay chase message for the supplier. When a supplier replies on WhatsApp in mixed Malay, Chinese and English, staff paste the reply and AI turns it into structured facts (delay, partial delivery, price change, confirmation); the owner checks and confirms before any order is changed. When goods arrive, staff enter the received quantity; any mismatch is flagged for the owner, who decides what to do. Every step is written to an activity log, so the owner stays in control and can see exactly what happened.
+Sudahsampai is a supplier-order follow-up module, designed as a third-party module for the Orbyte ecosystem. Every order goes through the same five steps:
 
-## Key Features
+1. **Trigger** — a new (simulated) day starts, goods arrive, or a supplier reply is pasted in.
+2. **Read data** — the order (supplier, item, quantity, unit price, delivery date, reminder rule) and the supplier's reply.
+3. **Identify exceptions (rules + AI)** — deterministic rules find orders that are due, overdue or delivered short; AI reads the supplier's free-text reply into a fixed JSON result (delay, partial delivery, price change, confirmation or unclear).
+4. **Owner approval** — anything important (changing an order from a reply, resolving a short delivery, changing rules) needs the owner. Only clearly low-risk updates may apply automatically, and the owner can undo them.
+5. **Outcome + activity log** — the order is updated and every step is written to the activity log.
 
-The core flow follows the five steps **trigger → data → decision → approval → log**:
+AI only reads replies, flags exceptions and drafts messages; it never makes business decisions by itself.
 
-| Step | What happens in Sudahsampai |
-|------|-----------------------------|
-| 1. Trigger | A new simulated day starts ("Fast-forward 1 day"), staff confirm that goods have arrived, or a supplier reply is pasted in. |
-| 2. Data | Supplier orders: supplier name and WhatsApp number, item, category, quantity and unit, delivery date, expiry date, reminder rule and auto-chase setting; plus the supplier's reply text. |
-| 3. Decision | Deterministic rules: inside the reminder window → reminder; past the delivery date → overdue, plus a bilingual chase message if auto-chase is on; received quantity ≠ ordered quantity → discrepancy. Each order page explains in one sentence why it has its colour. AI is used in one place only: reading a supplier reply into a fixed JSON result (see below). |
-| 4. Approval | Only the owner can change reminder rules, resolve a discrepancy (accept received quantity / request restock from supplier / mark for negotiation), and confirm an order update suggested from a supplier reply. Staff see these controls disabled, and the server rejects their requests. |
-| 5. Log | Every action is recorded with simulated date, real time (Malaysia time), role, action and detail, shown on the activity log page and at the bottom of each order. |
+### Key Features
 
-### The AI step: reading supplier replies
+- **Priority dashboard** — today's to-do in three groups: *Must handle*, *Good to know* and *Waiting for supplier*, plus a one-line summary (needs action, arriving soon, waiting, losses prevented in RM).
+- **New purchase order entry** — supplier, WhatsApp number, item, category, quantity, unit, unit price, delivery and expiry dates, reminder rule.
+- **Supplier reply analysis with DeepSeek (`deepseek-chat`)** — returns fixed JSON (`intent`, `new_delivery_date`, `quantity`, `unit_price`, `confidence`, `summary_en`), validated on the server. A result with confidence below 0.6, an unclear intent or an invalid field is marked *needs human check*.
+- **Offline rule mode** — if the AI is not configured, takes longer than 15 s or returns an error, keyword and regular-expression rules take over and the page labels it, so the demo never stops.
+- **Personal data redacted before any AI call** — phone numbers, email addresses, names after a title (e.g. "Encik Ali", "Mr Tan") and the supplier's name are replaced with `[REDACTED]`; the supplier name, phone number and order number are not sent.
+- **Auto-apply low-risk updates** — per-order owner setting (on by default): if the supplier confirms, or delays by 1–2 days, with confidence ≥ 0.8, the update is applied and logged. Only the owner can undo it. Partial deliveries, price changes and unclear replies always wait for the owner.
+- **Receiving check** — staff enter the received quantity; a short delivery is flagged with its RM value and sent to the owner, who can accept it, mark it for negotiation, or ask the supplier to restock. Choosing restock changes the status to *waiting for restock*, logs it, and sends a bilingual restock request to the supplier (simulated, shown on the order page).
+- **AI-drafted supplier replies** — after each analysis, an English + Malay reply draft that can be edited before sending; sending is simulated. It never accepts a price change or a smaller quantity on the owner's behalf. Without AI, a template is used.
+- **Roles: owner vs staff** — `@owner_required` protects owner-only actions on the server; a staff attempt returns 403 and is logged as `permission_denied`.
+- **Activity log** — every action with simulated date, Malaysia time, role and detail; filterable by order number.
+- **Orbyte credits (simulated)** — 1 credit per automatic chase message and per delivery check.
+- **Simulated date** — "Fast-forward 1 day" runs reminders, marks overdue orders and sends automatic chase messages (simulated); "Reset demo data" (owner only) restores the synthetic data and date 2026-10-21.
+- **UI in English / Bahasa Melayu / Chinese** — switchable in the top bar.
+- **Feedback page** (`/feedback`) — an anonymous five-question survey for shop owners; answers are stored in the database. Nothing is pre-filled.
 
-Supplier replies are informal and mix languages, e.g. *"Bos, sorry ya 青菜 hari ni tak dapat hantar, lori rosak. Jumaat baru sampai, ok?"*. Keyword rules break as soon as the wording changes, so this one step uses a large language model:
+### Orbyte Fit
 
-- The reply is turned into a fixed JSON result: `intent` (delay / partial / price_change / confirm / unclear), `new_delivery_date`, `quantity`, `unit_price`, `confidence`, `summary_en`. Relative dates such as "Jumaat" (Friday) are converted using the simulated date.
-- The server validates every field. If validation fails, `confidence` is below 0.6, or the intent is unclear, the result is marked **needs human check** and no update is offered.
-- The system then gives a rule-based suggestion (for example, how many days later the new date is) and **only the owner** can confirm the update. The log records the original text, the AI result and who confirmed it.
-- **Low-risk updates can apply themselves.** Each order has an owner-only switch "Apply low-risk supplier updates automatically" (on by default). If the result has confidence ≥ 0.8 and is low risk — the supplier confirms, or delays by 1–2 days to a date not in the past — the update is applied at once, logged as `auto_applied`, and the order page shows "Updated automatically by your rule" with an **Undo** button (owner only; undoing is logged as `auto_undone`). Partial deliveries, price changes, unclear replies and anything below 0.8 always wait for the owner.
-- **Restock request.** When the owner resolves a short delivery with "Ask supplier to restock", the app writes a polite English + Malay request with the item, ordered and received quantities and how many are missing, and asks the supplier to confirm a date. It is sent through `orbyte_adapter.send_message` (simulated), logged as `restock_message` and shown on the order page. The AI writes it when available (only item and quantities are sent; the request must contain the correct missing quantity), otherwise a template is used.
-- **Reply draft.** After each analysis, the AI drafts a short, polite reply in English and Malay based on the intent (e.g. confirm the new date, ask when the remaining quantity will come). It never accepts a price change or a smaller quantity on the owner's behalf. The draft can be edited and is sent only when someone clicks "Send reply (simulated)" (through `orbyte_adapter.send_message`, logged as `reply_sent`). Without AI, a fixed template is used.
-- If the AI service is not configured, takes longer than 15 seconds, or returns an error, the app switches to a **rule mode** (keywords + regular expressions) and labels it on the page, so the demo never stops.
-- Both AI calls (reading the reply and drafting the answer) send only redacted text, see Data & Privacy.
-- All AI code is in `src/ai_parser.py`. The model is reached through any OpenAI-compatible API set by environment variables; the live demo uses the DeepSeek API (`deepseek-chat`).
+All platform calls go through one file, `src/orbyte_adapter.py`:
 
-Other features:
+| Function | Orbyte capability (assumed) |
+|---|---|
+| `get_current_user()` | Current user and role (owner / staff) |
+| `get_supplier_contact(order)` | Supplier contact |
+| `send_message(contact, text)` | Messaging (WhatsApp via Orbyte Connect) |
+| `create_approval(conn, order_id, title, detail)` | Approval task in the owner's to-do list |
+| `charge_credit(conn, reason, order_id)` | Credit wallet |
+| `write_audit(conn, action, detail, ...)` | Shared audit log |
 
-- Owner / staff roles (simulated login) with a single `@owner_required` permission check on the server; denied attempts are logged as `permission_denied`.
-- On-time tracking: each delivery records whether it arrived on or before the delivery date.
-- Same order is not reminded or chased twice on the same day.
-- Summary of triggered events on the home page after each fast-forward.
-- Owner-only "Reset demo data" button that reloads the synthetic data and sets the date back to 2026-10-21.
-- `/feedback` page (link in the top navigation): five questions for shop owners — shop type, hours a week spent following up suppliers, most useful feature, what to improve (optional) and whether they would pay monthly. Nothing is pre-filled; answers are saved in the `feedback` table and logged as `feedback_submitted`. Resetting the demo data does not delete feedback.
-- Orbyte interface layer (`src/orbyte_adapter.py`): current user, supplier contacts, messaging, approvals, credit wallet and audit log all go through six functions. **All of them are simulated** today, based on our own assumptions about Orbyte's APIs; see [docs/api.md](docs/api.md).
-- Simulated Orbyte credits: 1 credit per automatic chase and per delivery check, shown in the page corner.
-- `POST /api/delivery-check`: the delivery check as a JSON API for other modules ([docs/api.md](docs/api.md)).
-- Mobile-friendly pages.
+All of these are **simulated** today, based on our own assumptions about Orbyte's APIs. This is the only file to change when connecting to real Orbyte. Sudahsampai does not duplicate Orbyte's HR or admin features: users, roles and contacts are expected to come from Orbyte. Details: [docs/api.md](docs/api.md).
 
-Not yet built (planned): actually sending WhatsApp messages, and connecting to real Orbyte APIs.
-
-## Tech Stack
+### Tech Stack
 
 | Layer | Technology |
-|-------|------------|
-| Language | Python 3.12 |
-| Web framework | Flask 3 |
+|---|---|
+| Frontend | Jinja2 templates, plain CSS, Lucide icons (unpkg CDN), Plus Jakarta Sans (Google Fonts) |
+| Backend | Python 3.12, Flask 3 |
 | Database | SQLite (Python built-in `sqlite3`, no ORM) |
-| Templates / UI | Jinja2 templates, plain CSS |
-| AI | DeepSeek API (`deepseek-chat`) through the `openai` Python library (OpenAI-compatible API, configured by environment variables) |
+| AI | DeepSeek API (`deepseek-chat`) through the `openai` Python library (OpenAI-compatible, configured by environment variables) |
+| Hosting / Development | Replit, Reserved VM deployment |
 | Tests | Python `unittest` + Flask `test_client` |
-| Hosting | Replit (Reserved VM deployment) |
 
 ## Project Structure
 
 ```
 .
 ├── src/
-│   ├── app.py              Flask routes, business rules, permission check
-│   ├── db.py               Database schema, logging, simulated date, seed loading
-│   ├── ai_parser.py        AI reading of supplier replies, validation, rule-mode fallback
-│   ├── orbyte_adapter.py   Simulated Orbyte interface layer (6 functions)
-│   ├── templates/          Jinja2 HTML templates
-│   └── static/style.css    Styles (mobile-friendly)
+│   ├── app.py                Flask routes, business rules, owner/staff permission check
+│   ├── db.py                 SQLite schema, activity log, simulated date, seed loading
+│   ├── ai_parser.py          AI reply reading, redaction, validation, rule mode, reply/restock drafts
+│   ├── orbyte_adapter.py     Simulated Orbyte interface layer (the only file to replace for real Orbyte)
+│   ├── i18n.py               Language switching (EN / BM / 中文)
+│   ├── locales.json          All UI text in three languages
+│   ├── templates/            Jinja2 HTML templates
+│   └── static/               style.css
 ├── data/
-│   ├── seed_orders.json    Synthetic orders (fictional suppliers)
-│   └── sample_replies.json Synthetic supplier replies (one per intent, mixed languages)
+│   ├── seed_orders.json      Synthetic orders (fictional suppliers)
+│   └── sample_replies.json   Synthetic supplier replies (one per intent, mixed languages)
 ├── tests/
-│   ├── test_app.py         App tests (orders, receiving, permissions, fast-forward)
-│   └── test_ai_parser.py   AI parser tests (rule mode, validation, fallback)
+│   ├── test_app.py           App tests (24)
+│   └── test_ai_parser.py     AI parser tests (51)
 ├── scripts/
-│   └── compare_models.py   Compare AI models on the sample supplier replies
+│   └── compare_models.py     Compares AI models on the sample replies (used for the RunPod test)
 ├── docs/
-│   └── api.md              Module API and assumed Orbyte capabilities (all simulated)
-├── submission/             Proposal, declaration, slides, proof of Replit use, video link
-├── requirements.txt
-├── .replit                 Replit run and deployment config
-└── LICENSE                 Apache License 2.0
+│   └── api.md                Module API and assumed Orbyte capabilities (all simulated)
+├── submission/
+│   ├── README.md                                  List of submission files
+│   ├── SDC2026_200OKFOUND_Preliminary.pdf         Preliminary proposal
+│   ├── SDC2026_200OKFOUND_TechDeclaration.pdf     Technology & tools declaration
+│   ├── SDC2026_200OKFOUND_Replit_POU.pdf          Replit proof of use
+│   ├── SDC2026_200OKFOUND_Runpod_POU.pdf          RunPod proof of use
+│   └── SDC2026_200OKFOUND_PitchDeck.pdf           Slide deck
+├── requirements.txt          Flask, openai
+├── .replit                   Replit run and deployment config
+└── LICENSE                   Apache License 2.0
 ```
 
-`data/sdc.db` (database) and `data/sim_state.json` (current simulated date) are created at runtime and are not committed.
+`data/sdc.db` (the SQLite database) and `data/sim_state.json` (current simulated date) are created at runtime and are not committed.
+
+### Architecture
+
+```
+Browser
+  │
+  ▼
+Flask app on Replit (src/app.py)
+  ├── src/db.py              → SQLite (data/sdc.db)
+  ├── src/ai_parser.py       → DeepSeek API (redacted text only; offline rules if unavailable)
+  └── src/orbyte_adapter.py  → Orbyte platform (simulated)
+```
+
+Module interfaces and assumptions: [docs/api.md](docs/api.md).
 
 ## How to Run
 
-### Locally
+### Environment variables
 
-Windows (PowerShell):
+| Variable | Purpose | If not set |
+|---|---|---|
+| `SECRET_KEY` | Signs the session cookie | A random key is generated at each start |
+| `AI_BASE_URL` | OpenAI-compatible API address, e.g. `https://api.deepseek.com` | Offline rule mode |
+| `AI_API_KEY` | API key for that service | Offline rule mode |
+| `AI_MODEL` | Model name, e.g. `deepseek-chat` | Offline rule mode |
+| `AI_MAX_TOKENS` (optional) | Maximum tokens the model may return | 400 |
+| `AI_REASONING_EFFORT` (optional) | e.g. `low`; only sent to the model when set | Not sent |
+
+Without the three `AI_*` values the app still works: supplier replies are read by the offline rules, and reply drafts and restock requests use templates. Never put these values in the code or commit them.
+
+### Option 1: Replit
+
+1. **Create App → Import from GitHub** and choose this repository.
+2. Add the variables above under **Secrets** (used by Run / Preview). For a published app, add them again under **Publish → Deployment secrets**; the two lists are separate.
+3. Click **Run**. The command in `.replit` creates a virtual environment, installs `requirements.txt` and starts `src/app.py` on port 5000.
+4. To publish, deploy as a **Reserved VM** (SQLite is a local file).
+
+### Option 2: Local
 
 ```bash
-py -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe src/app.py
+git clone https://github.com/zhukunliang/Sudahsampai.git
+```
+```bash
+cd Sudahsampai
 ```
 
 macOS / Linux:
 
 ```bash
 python3 -m venv .venv
+```
+```bash
 .venv/bin/pip install -r requirements.txt
+```
+```bash
 .venv/bin/python src/app.py
 ```
 
-Then open http://localhost:5000. Optional environment variables:
+Windows (PowerShell):
 
-| Variable | Purpose | If not set |
-|----------|---------|------------|
-| `SECRET_KEY` | Signs the session cookie | A random key is generated at each start |
-| `AI_BASE_URL` | OpenAI-compatible API address, e.g. `https://api.deepseek.com` | Rule mode |
-| `AI_API_KEY` | API key for that service | Rule mode |
-| `AI_MODEL` | Model name, e.g. `deepseek-chat` or `glm-5.3` | Rule mode |
-| `AI_MAX_TOKENS` | Maximum tokens the model may return; raise it for models that reason before answering | 400 |
-| `AI_REASONING_EFFORT` | e.g. `low`; only sent to the model when set | Not sent |
+```bash
+py -m venv .venv
+```
+```bash
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+```bash
+.venv\Scripts\python.exe src/app.py
+```
 
-Never put these values in the code or commit them.
+Then open http://localhost:5000. To use the AI, set the environment variables in the same terminal before starting (the app reads them from the environment; it does not load a `.env` file).
 
-### On Replit
-
-1. **Create App → Import from GitHub**, and choose this repository.
-2. Press **Run**; the app starts with `python src/app.py` on port 5000 (configured in `.replit`).
-3. Add `SECRET_KEY`, `AI_BASE_URL`, `AI_API_KEY` and `AI_MODEL` under **Secrets** (for Run / Preview) **and** under **Deployment secrets** (for the published app); the two lists are separate.
-4. **Publish** as a **Reserved VM**. SQLite is a local file, so Autoscale instances would lose data.
-5. After every publish, open the live site as the owner and press **Reset demo data**.
-
-## How to Run Tests
+### Run tests
 
 From the project root:
 
@@ -163,22 +200,26 @@ From the project root:
 python -m unittest discover tests
 ```
 
-There are 36 tests in two files. They never call a real AI service and need no API key.
+75 tests (24 in `tests/test_app.py`, 51 in `tests/test_ai_parser.py`). They use a temporary database, never call a real AI service and need no API key.
 
-- `tests/test_app.py` uses a temporary database and simulated-date file (via the `SDC_DB_PATH` and `SDC_SIM_PATH` environment variables) and deletes them afterwards, so `data/sdc.db` is never touched. It covers: rejecting a zero quantity, matching and mismatched deliveries, staff being blocked from owner-only actions, auto-chase on overdue orders without duplicates on the same day, low-risk updates applied automatically, risky ones left for the owner, undo (owner only, refused once the order has changed), sending a reply draft, and the feedback form (empty at start, saved only when valid, kept after a demo reset).
-- `tests/test_ai_parser.py` covers the rule mode on every sample reply and on mixed messages such as *"Jumaat baru boleh hantar, 12 kotak je dulu"* (delay + partial: 12 boxes, next Friday), the rule that "confirm" is only chosen when no delay, partial or price signal is present, server-side validation of bad AI results, and falling back to rule mode when the AI times out or fails.
+### Demo tips for judges
 
-## How We Use Replit
+- No login or password is needed: roles are simulated. Use the dark **Demo controls** bar at the top to switch between **Owner** and **Staff**; as staff, owner-only buttons are disabled and direct requests are refused and logged.
+- **Fast-forward 1 day** moves the simulated date forward and shows what was triggered (reminders, overdue orders, chase messages).
+- **Reset demo data** (owner only) restores the 7 synthetic orders and the date 2026-10-21.
+- On an order page, choose a sample supplier reply and click **Analyse reply** to see the AI result, the suggested update and the reply draft.
 
-- **Development:** the GitHub repository is imported into Replit; we run and check the app with Run / Preview and use the Replit Shell and Git pane to pull new commits.
-- **Deployment:** the live demo at https://sudahsampai.replit.app is a Replit Reserved VM deployment; `SECRET_KEY` and the `AI_*` settings (including the DeepSeek API key) are stored in Replit Secrets, never in the code.
-- Proof of use: `submission/REPLIT_PROOF_OF_USE.pdf` (TBD).
+## How We Use Replit (Required)
 
-## How We Use RunPod
+- The GitHub repository was imported into Replit, where we ran and tested the app with Run / Preview and pulled new commits through the Git pane.
+- The live demo at https://sudahsampai.replit.app is a Replit **Reserved VM** deployment.
+- API keys are stored in Replit Secrets (and separately in Deployment secrets for the published app), never in the code.
+- Replit Core was redeemed with the SDC voucher.
+- Proof: [SDC2026_200OKFOUND_Replit_POU.pdf](submission/SDC2026_200OKFOUND_Replit_POU.pdf)
 
-We tested RunPod as a candidate AI provider but did not choose it for the live demo.
+## How We Use RunPod (Required)
 
-**What we tested.** The AI step reaches any OpenAI-compatible API through environment variables (`AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, plus the optional `AI_MAX_TOKENS` and `AI_REASONING_EFFORT`), so no code is specific to one provider. We pointed it at RunPod's public endpoint for **GLM-5.3** (`glm-5.3`, max tokens 2000, reasoning effort `low`), paid from the RunPod credits provided by the competition, and ran `scripts/compare_models.py` against both providers on the same 6 synthetic supplier replies (simulated date 2026-10-21):
+Our project does not need a GPU. We used a RunPod public endpoint for **GLM-5.3**, paid with the competition credits, to compare it against DeepSeek on the same 6 synthetic supplier replies with `scripts/compare_models.py`:
 
 | | DeepSeek (`deepseek-chat`) | RunPod (`glm-5.3`) |
 |---|---|---|
@@ -187,48 +228,62 @@ We tested RunPod as a candidate AI provider but did not choose it for the live d
 | Flagged for human check | 1 (the unclear reply) | 1 (the unclear reply) |
 | "Lori rosak. Jumaat baru boleh hantar, 12 kotak je dulu" (15 boxes ordered) | `partial`, 12 boxes, Friday | `delay`, 12 boxes, Friday |
 
-**Why we chose DeepSeek.** Both models handled the first five replies sensibly. On the last one, the supplier is both late *and* short; DeepSeek marked it as a partial delivery, while GLM-5.3 marked it only as a delay, which in our app would update the date but not warn the owner about the 3 missing boxes. DeepSeek was also about 4 times faster. This was a small test (6 replies, one run each), so it is not a general ranking of the two models. Switching to RunPod later only needs the Secrets changed; screenshots of the test are in `submission/`.
+DeepSeek was more accurate on the partial-delivery-plus-delay case (GLM-5.3's answer would have updated the date without warning the owner about the 3 missing boxes) and about 4 times faster, so the live app uses DeepSeek. This was a small test (6 replies, one run each), not a general ranking of the two models. Switching models only needs the `AI_*` environment variables changed; no code is specific to one provider.
+
+Proof: [SDC2026_200OKFOUND_Runpod_POU.pdf](submission/SDC2026_200OKFOUND_Runpod_POU.pdf)
 
 ## Data & Privacy
 
-- **Synthetic data only.** All suppliers, phone numbers, orders and supplier replies in `data/seed_orders.json` and `data/sample_replies.json` are fictional; phone numbers use the placeholder pattern `+60 12-000 10xx`. No real customer or supplier data is collected or stored. The only real input is the anonymous `/feedback` form, which asks for no name, phone number or other contact details.
-- **What the AI service receives (redacted before sending).** The DeepSeek API's servers are outside Malaysia, so the app sends only what is needed to read the reply: the reply text, the item name, the ordered quantity and unit, the planned delivery date and the simulated date. The supplier's name, phone number and the order number are **not** sent. Before sending, `redact()` in `src/ai_parser.py` replaces phone numbers, email addresses, names with a title (e.g. "Encik Ali", "Mr Tan") and the supplier's name inside the reply text with `[REDACTED]`. The activity log records each time a reply was sent redacted and how many items were hidden. The original reply stays only in the local database. Offline rule mode runs locally and sends nothing.
-- **Limits of redaction.** It is pattern-based: names written without a title (e.g. "Ali said ok") or in Chinese characters are not detected. In the demo all data is synthetic. The RunPod comparison test sent only the synthetic sample replies and one fictional order.
-- **For a real deployment**, supplier names and WhatsApp numbers can be personal data under Malaysia's Personal Data Protection Act 2010 (PDPA, as amended in 2024). A real deployment would need to:
-  - tell suppliers what data is stored and why, and use it only for order follow-up (notice and choice, purpose limitation);
-  - limit access by role and keep the activity log as an audit trail (security);
-  - store secrets outside the code, use HTTPS, and keep the database access-controlled;
-  - delete order and contact data that is no longer needed (retention);
-  - let suppliers ask to see or correct their data (access and data integrity);
-  - have a process for reporting data breaches;
-  - follow the PDPA rules on transferring personal data outside Malaysia before sending supplier messages to an overseas AI service, tell suppliers about it, or switch to an AI service hosted in a suitable location.
-- Exact legal obligations for a production deployment: TBD, to be confirmed against official PDPA guidance.
+- **Synthetic data only.** All suppliers, phone numbers, orders and replies in `data/seed_orders.json` and `data/sample_replies.json` are fictional. The SQLite database file is created at runtime and is not committed. The anonymous `/feedback` form asks for no name or contact details.
+- **Redaction before AI calls.** Only what is needed is sent (reply text, item, quantity and unit, delivery date, simulated date); phone numbers, emails, titled names and the supplier's name are replaced with `[REDACTED]`. Redaction is pattern-based, so names without a title or in Chinese characters are not detected.
+- **Real deployment.** Supplier names and phone numbers can be personal data under Malaysia's Personal Data Protection Act 2010 (PDPA); a real deployment would follow the PDPA, including its rules on sending data to an AI service outside Malaysia.
+- **Simulated in this prototype:** WhatsApp sending, login and roles, and the Orbyte platform.
+
+## Changes After Mentoring
+
+After mentoring on 23 Oct 2026 with mentor Fadli Khalid, we:
+
+- added a collapsible **"How Sudahsampai works"** banner at the top of the dashboard;
+- simplified the dashboard: today's to-do list comes first, the numbers are reduced to one line, and the colours use one main colour;
+- redacted personal data before every AI call.
+
+## Challenges & Learnings
+
+- **TODO** (team to write in own words)
+- **TODO** (team to write in own words)
+
+## Future Improvements (Phase 2)
+
+- Send and receive messages through the real WhatsApp Business API.
+- Connect to real Orbyte APIs by replacing `src/orbyte_adapter.py`.
+- Run a pilot with 3–5 merchants to measure a baseline: weekly hours spent following up suppliers, and RM lost to short deliveries.
+- Cover more languages and phrases in the offline rule mode.
 
 ## Team
 
 | Name | Role | GitHub |
-|------|------|--------|
-| Zhu Kunliang | Team Leader, TBD | TBD |
-| Yan Feifan | TBD | TBD |
-| Huang Jiamin | TBD | TBD |
-| Lou Jingxing | TBD | TBD |
+|---|---|---|
+| Zhu Kunliang | Team Leader / Development | TODO |
+| Yan Feifan | TODO | TODO |
+| Huang Jiamin | TODO | TODO |
+| Lou Jingxing | TODO | TODO |
+
+## AI Tools Disclosure
+
+Claude Code and Claude chat assisted with code and reviews under the team's direction. ChatGPT and Doubao assisted with slides and text. The full list is in the Technology & Tools Declaration PDF.
 
 ## Submission Checklist
 
-Deadline: Sunday 25 October 2026, 7:59:59 AM MYT (planned submission: evening of 24 October).
-
-- [ ] Proposal PDF: `SDC2026_Sudahsampai_Preliminary.pdf` (word limits checked)
-- [ ] Pitch deck (matches the video)
-- [ ] Live prototype link works in a private browser window: https://sudahsampai.replit.app
-- [ ] Technology & Tools Declaration: `SDC2026_Sudahsampai_TechDeclaration.pdf`
-- [ ] Proof of Replit use: `REPLIT_PROOF_OF_USE.pdf`
-- [ ] GitHub repository is **public**, has the Apache License 2.0, and judges are added as collaborators
-- [ ] No secrets in the repository
-- [ ] Pitch video on YouTube, 5-7 minutes, includes the live demo
-- [ ] Demo data reset before judging
+- [x] Team name, Domain 2 and SDG 8 filled in
+- [x] Slide deck and demo video links added
+- [x] Replit used, proof in `submission/`
+- [x] RunPod used (comparison test only), proof in `submission/`
+- [x] Preliminary proposal and Tech Declaration in `submission/`
+- [x] "How to Run" steps verified
+- [x] No API keys or secrets committed
+- [x] Apache License 2.0 included
+- [x] Repository public; committee accounts added as collaborators only if requested
 
 ## License
-
-Copyright 2026 Team Sudahsampai
 
 This project is licensed under the [Apache License 2.0](LICENSE).
