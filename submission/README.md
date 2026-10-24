@@ -1,24 +1,15 @@
 # Submission Files
 
-Final files for SDC Hackathon 2026 (Domain 2 - Orbyte Smart SME Challenge) go in this folder.
+Final files for SDC Hackathon 2026 (Domain 2 — Orbyte Smart SME Challenge), team **200 OK FOUND**.
 Deadline: **Sunday 25 October 2026, 7:59:59 AM MYT**, submitted once per team on sdchack.my.
 
-| # | File | Status |
-|---|------|--------|
-| 1 | `SDC2026_Sudahsampai_Preliminary.pdf` - proposal | TBD |
-| 2 | `SDC2026_Sudahsampai_TechDeclaration.pdf` - technology & tools declaration | TBD |
-| 3 | Pitch deck PDF (file name TBD) - must match the video | TBD |
-| 4 | `REPLIT_PROOF_OF_USE.pdf` - proof that Replit was used for development and deployment | TBD |
-| 5 | Pitch video (5-7 minutes, includes a live demo) - YouTube link below | TBD |
-| 6 | `RUNPOD_PROOF_OF_USE.pdf` - screenshots of the RunPod GLM-5.3 comparison test (compare script output + RunPod billing page, no API key visible) | TBD |
+| # | File | Where |
+|---|------|-------|
+| 1 | `SDC2026_200OKFOUND_Preliminary.pdf` — preliminary proposal | Submitted on sdchack.my only (contains contact details) |
+| 2 | `SDC2026_200OKFOUND_TechDeclaration.pdf` — technology & tools declaration | Submitted on sdchack.my only (contains contact details) |
+| 3 | [`SDC2026_200OKFOUND_PitchDeck.pdf`](SDC2026_200OKFOUND_PitchDeck.pdf) — slide deck | This folder |
+| 4 | [`SDC2026_200OKFOUND_Replit_POU.pdf`](SDC2026_200OKFOUND_Replit_POU.pdf) — Replit proof of use | This folder |
+| 5 | [`SDC2026_200OKFOUND_Runpod_POU.pdf`](SDC2026_200OKFOUND_Runpod_POU.pdf) — RunPod proof of use (model comparison test) | This folder |
+| 6 | Pitch video | https://youtu.be/iuXjIcDRGIM |
 
-## Pitch Video
-
-YouTube: TBD
-
-## Before Uploading
-
-- File names follow the `SDC2026_Sudahsampai_...` pattern.
-- Word limits in the proposal and declaration are respected.
-- Every link opens in a private / incognito browser window.
-- The live demo link is https://sudahsampai.replit.app and the data has been reset with "Reset demo data".
+Live demo: https://sudahsampai.replit.app — reset with "Reset demo data" (as owner) before judging.

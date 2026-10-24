@@ -109,8 +109,6 @@ All of these are **simulated** today, based on our own assumptions about Orbyte'
 │   └── api.md                Module API and assumed Orbyte capabilities (all simulated)
 ├── submission/
 │   ├── README.md                                  List of submission files
-│   ├── SDC2026_200OKFOUND_Preliminary.pdf         Preliminary proposal
-│   ├── SDC2026_200OKFOUND_TechDeclaration.pdf     Technology & tools declaration
 │   ├── SDC2026_200OKFOUND_Replit_POU.pdf          Replit proof of use
 │   ├── SDC2026_200OKFOUND_Runpod_POU.pdf          RunPod proof of use
 │   └── SDC2026_200OKFOUND_PitchDeck.pdf           Slide deck
@@ -120,6 +118,8 @@ All of these are **simulated** today, based on our own assumptions about Orbyte'
 ```
 
 `data/sdc.db` (the SQLite database) and `data/sim_state.json` (current simulated date) are created at runtime and are not committed.
+
+The preliminary proposal (`SDC2026_200OKFOUND_Preliminary.pdf`) and the Technology & Tools Declaration (`SDC2026_200OKFOUND_TechDeclaration.pdf`) are submitted on sdchack.my and are not in this public repository, because they contain the team leader's contact details.
 
 ### Architecture
 
@@ -249,8 +249,8 @@ After mentoring on 23 Oct 2026 with mentor Fadli Khalid, we:
 
 ## Challenges & Learnings
 
-- **TODO** (team to write in own words)
-- **TODO** (team to write in own words)
+- **Challenge — one reply often says two things.** Supplier messages mix Malay, Chinese and English, and a single line like *"Jumaat baru boleh hantar, 12 kotak je dulu"* means both "late" and "short"; our first offline rules read it as a confirmation. We fixed this by collecting every signal before choosing the intent, and by keeping the AI as a reader only: the server validates its answer and the owner approves anything risky.
+- **Learning — privacy and deployment matter as much as features.** Mentor feedback showed that supplier names were being sent to an overseas AI service, so we added redaction before every AI call; and a Replit build broke when packages could no longer be installed into the system Python, which we fixed with a project virtual environment. Testing on the live site after every publish caught problems that local tests did not.
 
 ## Future Improvements (Phase 2)
 
@@ -263,14 +263,14 @@ After mentoring on 23 Oct 2026 with mentor Fadli Khalid, we:
 
 | Name | Role | GitHub |
 |---|---|---|
-| Zhu Kunliang | Team Leader / Development | TODO |
-| Yan Feifan | TODO | TODO |
-| Huang Jiamin | TODO | TODO |
-| Lou Jingxing | TODO | TODO |
+| Zhu Kunliang | Team Leader / Development (code) | [zhukunliang](https://github.com/zhukunliang) |
+| Yan Feifan | Pitch deck (slides) | [Scarlett2026109](https://github.com/Scarlett2026109) |
+| Huang Jiamin | Demo video | JasmineHuang111 |
+| Lou Jingxing | Documents (proposal and declaration PDFs) | [201035](https://github.com/201035) |
 
 ## AI Tools Disclosure
 
-Claude Code and Claude chat assisted with code and reviews under the team's direction. ChatGPT and Doubao assisted with slides and text. The full list is in the Technology & Tools Declaration PDF.
+Claude Code and Claude chat assisted with code and reviews under the team's direction. ChatGPT and Doubao assisted with slides and text. The full list is in the Technology & Tools Declaration (submitted on sdchack.my).
 
 ## Submission Checklist
 
@@ -278,7 +278,7 @@ Claude Code and Claude chat assisted with code and reviews under the team's dire
 - [x] Slide deck and demo video links added
 - [x] Replit used, proof in `submission/`
 - [x] RunPod used (comparison test only), proof in `submission/`
-- [x] Preliminary proposal and Tech Declaration in `submission/`
+- [x] Preliminary proposal and Tech Declaration submitted on sdchack.my (not in the public repo: they contain contact details)
 - [x] "How to Run" steps verified
 - [x] No API keys or secrets committed
 - [x] Apache License 2.0 included
